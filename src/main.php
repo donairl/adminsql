@@ -72,7 +72,7 @@ class MainController
                 $_SESSION['password']
             );
 
-            $this->databases = $this->pgsql->show_databases();
+            $this->databases = $this->pgsql->show_database();
         } catch (\Exception $e) {
             $this->databases = [];
         }
