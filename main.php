@@ -43,6 +43,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             header('Location: ' . $redirectUrl . '&deleted=' . $main->deleteSuccessCount);
             exit;
         }
+    } elseif ($_POST['action'] === 'run_sql') {
+        $success = $main->processSqlQuery();
+        // Always redirect back to show results
+        header('Location: ' . $_SERVER['REQUEST_URI']);
+        exit;
     }
 }
 

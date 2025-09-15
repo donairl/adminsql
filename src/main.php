@@ -110,7 +110,7 @@ class MainController
                 $_SESSION['password']
             );
 
-            $this->tableStructure = $this->pgsql->show_fields($this->selectedTable);
+            $this->tableStructure = $this->pgsql->show_field($this->selectedTable);
         } catch (\Exception $e) {
             $this->tableStructure = [];
         }
@@ -302,16 +302,55 @@ class MainController
         }
     }
 
-    private function isSerialField($type)
+    public function isSerialField($type)
     {
         $type = strtolower($type);
         return strpos($type, 'serial') !== false || $type === 'bigserial' || $type === 'smallserial';
     }
 
-    private function isIdField($name)
+    public function isIdField($name)
     {
         $name = strtolower($name);
         return $name === 'id' || strpos($name, '_id') === 0 || strpos($name, 'id_') !== false;
+    }
+
+    public function processSqlQuery()
+    {
+        try {
+            // Ensure we're connected to the correct database
+            $this->pgsql->connect(
+                $_SESSION['host'] ?? 'localhost',
+                $_SESSION['port'] ?? 5432,
+                $this->selectedDatabase,
+                $_SESSION['username'],
+                $_SESSION['password']
+            );
+
+            if (!isset($_POST['sql_query']) || empty(trim($_POST['sql_query']))) {
+                throw new \Exception('No SQL query provided');
+            }
+
+            $query = trim($_POST['sql_query']);
+
+            // Check if it's a SELECT query or other query type
+            $isSelect = stripos($query, 'SELECT') === 0;
+
+            if ($isSelect) {
+                $result = $this->pgsql->run_query($query);
+                $_SESSION['sql_result'] = ['rows' => $result];
+            } else {
+                // For non-SELECT queries, execute and get affected rows
+                $result = $this->pgsql->run_query($query);
+                $affectedRows = is_array($result) ? count($result) : 0;
+                $_SESSION['sql_result'] = ['rows' => [], 'affected_rows' => $affectedRows];
+            }
+
+            return true;
+
+        } catch (\Exception $e) {
+            $_SESSION['sql_result'] = ['error' => $e->getMessage()];
+            return false;
+        }
     }
 }
 
@@ -411,15 +450,17 @@ class MainView
         foreach ($tables as $table) {
             $isActive = ($table === $selectedTable) ? 'active' : '';
             $html .= '<li class="table-item ' . $isActive . '">
-                <div class="table-name">
+                <a href="?db=' . urlencode($this->controller->getSelectedDatabase()) . '&table=' . urlencode($table) . '&action=select" class="table-name">
                     <i class="fas fa-table"></i> ' . htmlspecialchars($table) . '
-                </div>';
+                </a>';
 
             if ($table === $selectedTable) {
+                //table actions
                 $html .= '<ul class="table-actions">
-                    <li><a href="?db=' . urlencode($this->controller->getSelectedDatabase()) . '&table=' . urlencode($table) . '&action=structure"><i class="fas fa-info-circle"></i> Show Structure</a></li>
-                    <li><a href="?db=' . urlencode($this->controller->getSelectedDatabase()) . '&table=' . urlencode($table) . '&action=select"><i class="fas fa-list"></i> Select Data</a></li>
-                    <li><a href="?db=' . urlencode($this->controller->getSelectedDatabase()) . '&table=' . urlencode($table) . '&action=insert"><i class="fas fa-plus"></i> Insert Data</a></li>
+                    <li><a href="?db=' . urlencode($this->controller->getSelectedDatabase()) . '&table=' . urlencode($table) . '&action=structure"><i class="fas fa-info-circle"></i></a></li>
+                    <li><a href="?db=' . urlencode($this->controller->getSelectedDatabase()) . '&table=' . urlencode($table) . '&action=select"><i class="fas fa-list"></i></a></li>
+                    <li><a href="?db=' . urlencode($this->controller->getSelectedDatabase()) . '&table=' . urlencode($table) . '&action=insert"><i class="fas fa-plus"></i></a></li>
+                    <li><a href="?db=' . urlencode($this->controller->getSelectedDatabase()) . '&table=' . urlencode($table) . '&action=delete"><i class="fas fa-trash"></i></a></li>
                 </ul>';
             }
 
@@ -430,16 +471,141 @@ class MainView
         return $html;
     }
 
+    private function getDatabaseOverview()
+    {
+        $selectedDb = $this->controller->getSelectedDatabase();
+        $tables = $this->controller->getTables();
+
+        $html = '<div class="database-overview">
+            <div class="database-header">
+                <h2><i class="fas fa-database"></i> ' . htmlspecialchars($selectedDb) . '</h2>
+                <div class="database-stats">
+                    <span class="stat"><i class="fas fa-table"></i> ' . count($tables) . ' Tables</span>
+                </div>
+            </div>
+
+            <div class="database-content">
+                <div class="database-section">
+                    <h3>Tables Overview</h3>
+                    <div class="tables-grid">';
+
+        if (!empty($tables)) {
+            foreach ($tables as $table) {
+                $html .= '<div class="table-card">
+                    <div class="table-card-header">
+                        <i class="fas fa-table"></i>
+                        <a href="?db=' . urlencode($selectedDb) . '&table=' . urlencode($table) . '&action=select" class="table-link">
+                            ' . htmlspecialchars($table) . '
+                        </a>
+                    </div>
+                    <div class="table-card-actions">
+                        <a href="?db=' . urlencode($selectedDb) . '&table=' . urlencode($table) . '&action=structure" class="action-link">
+                            <i class="fas fa-info-circle"></i> Structure
+                        </a>
+                        <a href="?db=' . urlencode($selectedDb) . '&table=' . urlencode($table) . '&action=select" class="action-link">
+                            <i class="fas fa-list"></i> Data
+                        </a>
+                        <a href="?db=' . urlencode($selectedDb) . '&table=' . urlencode($table) . '&action=insert" class="action-link">
+                            <i class="fas fa-plus"></i> Insert
+                        </a>
+                    </div>
+                </div>';
+            }
+        } else {
+            $html .= '<div class="no-tables">No tables found in this database</div>';
+        }
+
+        $html .= '</div></div>
+
+                <div class="database-section">
+                    <h3>Run SQL Query</h3>
+                    <form method="POST" action="" class="sql-query-form">
+                        <input type="hidden" name="action" value="run_sql">
+                        <div class="query-input">
+                            <textarea name="sql_query" placeholder="Enter your SQL query here..." rows="8" required></textarea>
+                        </div>
+                        <div class="query-actions">
+                            <button type="submit" class="btn-primary">
+                                <i class="fas fa-play"></i> Execute Query
+                            </button>
+                            <button type="button" onclick="clearQuery()" class="btn-secondary">
+                                <i class="fas fa-times"></i> Clear
+                            </button>
+                        </div>
+                    </form>';
+
+        // Display query results if any
+        if (isset($_SESSION['sql_result'])) {
+            $html .= $this->getSqlResultDisplay();
+            unset($_SESSION['sql_result']);
+        }
+
+        $html .= '</div></div></div>';
+
+        return $html;
+    }
+
+    private function getSqlResultDisplay()
+    {
+        if (!isset($_SESSION['sql_result'])) {
+            return '';
+        }
+
+        $result = $_SESSION['sql_result'];
+        $html = '<div class="sql-result">';
+
+        if (isset($result['error'])) {
+            $html .= '<div class="alert alert-error">
+                <i class="fas fa-exclamation-triangle"></i>
+                SQL Error: ' . htmlspecialchars($result['error']) . '
+            </div>';
+        } elseif (isset($result['rows'])) {
+            $html .= '<div class="query-success">
+                <h4>Query executed successfully</h4>';
+
+            if (is_array($result['rows']) && !empty($result['rows'])) {
+                $html .= '<div class="result-table-container">
+                    <table class="result-table">
+                        <thead><tr>';
+
+                // Get column names from first row
+                $columns = array_keys($result['rows'][0]);
+                foreach ($columns as $column) {
+                    $html .= '<th>' . htmlspecialchars($column) . '</th>';
+                }
+
+                $html .= '</tr></thead><tbody>';
+
+                foreach ($result['rows'] as $row) {
+                    $html .= '<tr>';
+                    foreach ($row as $value) {
+                        $displayValue = is_null($value) ? '<em>NULL</em>' : htmlspecialchars($value);
+                        $html .= '<td>' . $displayValue . '</td>';
+                    }
+                    $html .= '</tr>';
+                }
+
+                $html .= '</tbody></table></div>';
+            } else {
+                $html .= '<p>No results returned from query.</p>';
+            }
+
+            if (isset($result['affected_rows'])) {
+                $html .= '<p class="affected-rows">' . $result['affected_rows'] . ' rows affected</p>';
+            }
+        }
+
+        $html .= '</div></div>';
+        return $html;
+    }
+
     private function getMainContent()
     {
         $selectedTable = $this->controller->getSelectedTable();
         $selectedAction = $this->controller->getSelectedAction();
 
         if (!$selectedTable) {
-            return '<div class="welcome-message">
-                <h2>Welcome to PostgreSQL Dashboard</h2>
-                <p>Select a database and table from the sidebar to get started.</p>
-            </div>';
+            return $this->getDatabaseOverview();
         }
 
         $html = '<div class="content-header">
@@ -448,6 +614,7 @@ class MainView
                 <a href="?db=' . urlencode($this->controller->getSelectedDatabase()) . '&table=' . urlencode($selectedTable) . '&action=structure" class="' . ($selectedAction === 'structure' ? 'active' : '') . '">Structure</a>
                 <a href="?db=' . urlencode($this->controller->getSelectedDatabase()) . '&table=' . urlencode($selectedTable) . '&action=select" class="' . ($selectedAction === 'select' ? 'active' : '') . '">Data</a>
                 <a href="?db=' . urlencode($this->controller->getSelectedDatabase()) . '&table=' . urlencode($selectedTable) . '&action=insert" class="' . ($selectedAction === 'insert' ? 'active' : '') . '">Insert</a>
+                <a href="?db=' . urlencode($this->controller->getSelectedDatabase()) . '&table=' . urlencode($selectedTable) . '&action=delete" class="' . ($selectedAction === 'delete' ? 'active' : '') . '">Delete</a>
             </div>
         </div>';
 
@@ -467,6 +634,8 @@ class MainView
                 return $this->getTableDataHtml();
             case 'insert':
                 return $this->getInsertFormHtml();
+            case 'delete':
+                return $this->getDeleteFormHtml();
             default:
                 return '<div class="error">Unknown action</div>';
         }
@@ -523,6 +692,65 @@ class MainView
         $html .= '<form method="POST" action="" onsubmit="return confirmDelete()">
             <input type="hidden" name="action" value="delete_rows">
             <div class="data-table-container">
+                <div class="table-actions">
+                    <button type="button" onclick="toggleAllCheckboxes()" class="btn-secondary">
+                        <i class="fas fa-check-square"></i> Select All
+                    </button>
+                    <button type="submit" class="btn-danger">
+                        <i class="fas fa-trash"></i> Delete Selected (<span id="selection-count">0</span>)
+                    </button>
+                </div>
+                <div class="table-wrapper">
+                    <table class="data-table">
+                        <thead>
+                            <tr>
+                                <th><input type="checkbox" id="select-all" onchange="toggleAllCheckboxes()"></th>';
+
+        foreach ($structure as $field) {
+            $html .= '<th>' . htmlspecialchars($field['name']) . '</th>';
+        }
+
+        $html .= '</tr></thead><tbody>';
+
+        foreach ($data as $row) {
+            $firstValue = reset($row); // Get first column value for checkbox
+            $html .= '<tr>
+                <td><input type="checkbox" name="selected_rows[]" value="' . htmlspecialchars($firstValue) . '" onchange="updateSelectionCount()"></td>';
+
+            foreach ($structure as $field) {
+                $fieldName = $field['name'];
+                $value = $row[$fieldName] ?? '';
+                $displayValue = is_null($value) ? '<em>NULL</em>' : htmlspecialchars($value);
+                $html .= '<td>' . $displayValue . '</td>';
+            }
+
+            $html .= '</tr>';
+        }
+
+        $html .= '</tbody></table></div></div></form>';
+        return $html;
+    }
+
+    private function getDeleteFormHtml()
+    {
+        $data = $this->controller->getTableData();
+        $structure = $this->controller->getTableStructure();
+
+        $html = $this->getDeleteMessages();
+
+        if (empty($data)) {
+            $html .= '<div class="no-data">No data found in this table to delete</div>';
+            return $html;
+        }
+
+        $html .= '<form method="POST" action="" onsubmit="return confirmDelete()">
+            <input type="hidden" name="action" value="delete_rows">
+            <div class="delete-form-container">
+                <h3>Delete Records</h3>
+                <p class="warning-text">
+                    <i class="fas fa-exclamation-triangle"></i>
+                    Warning: Selected records will be permanently deleted. This action cannot be undone.
+                </p>
                 <div class="table-actions">
                     <button type="button" onclick="toggleAllCheckboxes()" class="btn-secondary">
                         <i class="fas fa-check-square"></i> Select All
@@ -822,9 +1050,16 @@ class MainView
         }
 
         .table-name {
+            display: block;
             padding: 8px 15px;
             font-size: 0.9em;
             color: #95a5a6;
+            text-decoration: none;
+            transition: color 0.2s ease;
+        }
+
+        .table-name:hover {
+            color: #bdc3c7;
         }
 
         .table-item.active .table-name {
@@ -832,10 +1067,14 @@ class MainView
             font-weight: 600;
         }
 
+        .table-item.active .table-name:hover {
+            color: #ecf0f1;
+        }
+
         .table-actions {
             list-style: none;
-            margin-left: 15px;
-            margin-top: 5px;
+            margin-left: 2px;
+            margin-top: 1px;
         }
 
         .table-actions a {
@@ -991,10 +1230,10 @@ class MainView
         }
 
         .table-actions {
-            padding: 20px;
+            padding: 2px;
             border-bottom: 1px solid #dee2e6;
             display: flex;
-            gap: 10px;
+            gap: 5px;
         }
 
         .btn-primary {
@@ -1070,16 +1309,30 @@ class MainView
             background: #f8f9fa;
         }
 
-        .insert-form-container {
+        .insert-form-container,
+        .delete-form-container {
             background: white;
             border-radius: 8px;
             box-shadow: 0 2px 4px rgba(0,0,0,0.1);
             padding: 30px;
         }
 
+        .warning-text {
+            background: #fff3cd;
+            border: 1px solid #ffeaa7;
+            color: #856404;
+            padding: 15px;
+            border-radius: 4px;
+            margin-bottom: 20px;
+        }
+
+        .warning-text i {
+            margin-right: 10px;
+        }
+
         .form-grid {
             display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+            grid-template-columns: repeat(2, 1fr);
             gap: 20px;
             margin-bottom: 30px;
         }
@@ -1271,6 +1524,252 @@ class MainView
                 align-items: stretch;
             }
         }
+
+        /* Database Overview Styles */
+        .database-overview {
+            padding: 20px;
+        }
+
+        .database-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 30px;
+            padding-bottom: 15px;
+            border-bottom: 2px solid #ecf0f1;
+        }
+
+        .database-header h2 {
+            margin: 0;
+            color: #2c3e50;
+        }
+
+        .database-header h2 i {
+            margin-right: 10px;
+            color: #3498db;
+        }
+
+        .database-stats {
+            display: flex;
+            gap: 15px;
+        }
+
+        .database-stats .stat {
+            background: #ecf0f1;
+            padding: 8px 15px;
+            border-radius: 20px;
+            font-size: 0.9em;
+            color: #7f8c8d;
+        }
+
+        .database-stats .stat i {
+            margin-right: 5px;
+        }
+
+        .database-content {
+            display: grid;
+            grid-template-columns: 2fr 1fr;
+            gap: 30px;
+        }
+
+        .database-section {
+            background: white;
+            border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+            padding: 25px;
+        }
+
+        .database-section h3 {
+            color: #2c3e50;
+            margin-bottom: 20px;
+            font-size: 1.2em;
+        }
+
+        /* Tables Grid */
+        .tables-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(250px, 1fr));
+            gap: 15px;
+        }
+
+        .table-card {
+            background: #f8f9fa;
+            border-radius: 6px;
+            padding: 15px;
+            transition: transform 0.2s, box-shadow 0.2s;
+        }
+
+        .table-card:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 4px 8px rgba(0,0,0,0.1);
+        }
+
+        .table-card-header {
+            display: flex;
+            align-items: center;
+            margin-bottom: 10px;
+        }
+
+        .table-card-header i {
+            margin-right: 8px;
+            color: #3498db;
+        }
+
+        .table-link {
+            color: #2c3e50;
+            text-decoration: none;
+            font-weight: 600;
+            transition: color 0.2s;
+        }
+
+        .table-link:hover {
+            color: #3498db;
+        }
+
+        .table-card-actions {
+            display: flex;
+            gap: 10px;
+        }
+
+        .action-link {
+            color: #7f8c8d;
+            text-decoration: none;
+            font-size: 0.8em;
+            transition: color 0.2s;
+        }
+
+        .action-link:hover {
+            color: #3498db;
+        }
+
+        .action-link i {
+            margin-right: 3px;
+        }
+
+        .no-tables {
+            text-align: center;
+            color: #95a5a6;
+            padding: 40px;
+            font-style: italic;
+        }
+
+        /* SQL Query Form */
+        .sql-query-form {
+            display: flex;
+            flex-direction: column;
+            gap: 15px;
+        }
+
+        .query-input textarea {
+            width: 100%;
+            border: 2px solid #ecf0f1;
+            border-radius: 6px;
+            padding: 15px;
+            font-family: "Courier New", monospace;
+            font-size: 0.9em;
+            resize: vertical;
+            transition: border-color 0.2s;
+        }
+
+        .query-input textarea:focus {
+            outline: none;
+            border-color: #3498db;
+        }
+
+        .query-actions {
+            display: flex;
+            gap: 10px;
+        }
+
+        .query-actions button {
+            padding: 10px 20px;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 0.9em;
+            transition: background-color 0.2s;
+        }
+
+        .query-actions .btn-primary {
+            background: #3498db;
+            color: white;
+        }
+
+        .query-actions .btn-primary:hover {
+            background: #2980b9;
+        }
+
+        .query-actions .btn-secondary {
+            background: #95a5a6;
+            color: white;
+        }
+
+        .query-actions .btn-secondary:hover {
+            background: #7f8c8d;
+        }
+
+        /* SQL Results */
+        .sql-result {
+            margin-top: 20px;
+        }
+
+        .query-success h4 {
+            color: #27ae60;
+            margin-bottom: 15px;
+        }
+
+        .result-table-container {
+            overflow-x: auto;
+            margin-top: 15px;
+        }
+
+        .result-table {
+            width: 100%;
+            border-collapse: collapse;
+            background: white;
+            border-radius: 4px;
+            overflow: hidden;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+        }
+
+        .result-table th {
+            background: #f8f9fa;
+            padding: 12px;
+            text-align: left;
+            font-weight: 600;
+            color: #2c3e50;
+            border-bottom: 2px solid #ecf0f1;
+        }
+
+        .result-table td {
+            padding: 12px;
+            border-bottom: 1px solid #ecf0f1;
+        }
+
+        .result-table tr:hover {
+            background: #f8f9fa;
+        }
+
+        .affected-rows {
+            margin-top: 10px;
+            color: #27ae60;
+            font-weight: 500;
+        }
+
+        /* Responsive Design */
+        @media (max-width: 768px) {
+            .database-content {
+                grid-template-columns: 1fr;
+            }
+
+            .tables-grid {
+                grid-template-columns: 1fr;
+            }
+
+            .query-actions {
+                flex-direction: column;
+            }
+        }
         ';
     }
 
@@ -1322,6 +1821,14 @@ class MainView
             }
 
             return confirm(`Are you sure you want to delete ${checkboxes.length} selected row(s)? This action cannot be undone.`);
+        }
+
+        function clearQuery() {
+            const textarea = document.querySelector(\'textarea[name="sql_query"]\');
+            if (textarea) {
+                textarea.value = \'\';
+                textarea.focus();
+            }
         }
 
         function resetForm() {
@@ -1377,4 +1884,12 @@ class Main {
     public function getInsertError() { return $this->controller->getInsertError(); }
     public function getDeleteSuccessCount() { return $this->controller->getDeleteSuccessCount(); }
     public function getDeleteError() { return $this->controller->getDeleteError(); }
+
+    // Property access delegation for backward compatibility
+    public function __get($property) {
+        if (property_exists($this->controller, $property)) {
+            return $this->controller->$property;
+        }
+        return null;
+    }
 }
