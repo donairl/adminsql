@@ -43,6 +43,18 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             header('Location: ' . $redirectUrl . '&deleted=' . $main->deleteSuccessCount);
             exit;
         }
+    } elseif ($_POST['action'] === 'drop_table') {
+        $success = $main->processDropTable();
+        // Redirect back to database overview after drop
+        $dbParam = isset($_GET['db']) ? '?db=' . urlencode($_GET['db']) : '';
+        header('Location: main.php' . $dbParam);
+        exit;
+    } elseif ($_POST['action'] === 'create_table') {
+        $success = $main->processCreateTable();
+        // Redirect back to database overview after create
+        $dbParam = isset($_GET['db']) ? '?db=' . urlencode($_GET['db']) : '';
+        header('Location: main.php' . $dbParam);
+        exit;
     } elseif ($_POST['action'] === 'run_sql') {
         $success = $main->processSqlQuery();
         // Always redirect back to show results

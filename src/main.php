@@ -302,6 +302,127 @@ class MainController
         }
     }
 
+    public function processDropTable()
+    {
+        try {
+            // Ensure we're connected to the correct database
+            $this->pgsql->connect(
+                $_SESSION['host'] ?? 'localhost',
+                $_SESSION['port'] ?? 5432,
+                $this->selectedDatabase,
+                $_SESSION['username'],
+                $_SESSION['password']
+            );
+
+            if (!isset($_POST['table_name']) || empty($_POST['table_name'])) {
+                throw new \Exception('No table name provided');
+            }
+
+            $tableName = trim($_POST['table_name']);
+
+            // Execute DROP TABLE query
+            $query = "DROP TABLE " . pg_escape_identifier($this->pgsql->getConnection(), $tableName);
+            $result = $this->pgsql->run_query($query);
+
+            // Set success message
+            $_SESSION['drop_success'] = "Table '" . htmlspecialchars($tableName) . "' has been successfully dropped.";
+            return true;
+
+        } catch (\Exception $e) {
+            $_SESSION['drop_error'] = $e->getMessage();
+            return false;
+        }
+    }
+
+    public function processCreateTable()
+    {
+        try {
+            // Ensure we're connected to the correct database
+            $this->pgsql->connect(
+                $_SESSION['host'] ?? 'localhost',
+                $_SESSION['port'] ?? 5432,
+                $this->selectedDatabase,
+                $_SESSION['username'],
+                $_SESSION['password']
+            );
+
+            if (!isset($_POST['table_name']) || empty(trim($_POST['table_name']))) {
+                throw new \Exception('Table name is required');
+            }
+
+            if (!isset($_POST['columns']) || empty($_POST['columns'])) {
+                throw new \Exception('At least one column is required');
+            }
+
+            $tableName = trim($_POST['table_name']);
+            $columns = $_POST['columns'];
+
+            // Validate table name
+            if (!preg_match('/^[a-zA-Z_][a-zA-Z0-9_]*$/', $tableName)) {
+                throw new \Exception('Invalid table name. Use only letters, numbers, and underscores, starting with a letter or underscore.');
+            }
+
+            // Build CREATE TABLE SQL
+            $sql = "CREATE TABLE " . pg_escape_identifier($this->pgsql->getConnection(), $tableName) . " (\n";
+
+            $columnDefinitions = [];
+            $primaryKeys = [];
+
+            foreach ($columns as $column) {
+                if (empty($column['name']) || empty($column['type'])) {
+                    continue; // Skip empty columns
+                }
+
+                $columnName = trim($column['name']);
+                $columnType = $column['type'];
+
+                // Validate column name
+                if (!preg_match('/^[a-zA-Z_][a-zA-Z0-9_]*$/', $columnName)) {
+                    throw new \Exception("Invalid column name '$columnName'. Use only letters, numbers, and underscores.");
+                }
+
+                $definition = pg_escape_identifier($this->pgsql->getConnection(), $columnName) . " " . $columnType;
+
+                // Add constraints
+                if (isset($column['not_null']) && $column['not_null']) {
+                    $definition .= " NOT NULL";
+                }
+
+                if (isset($column['unique']) && $column['unique']) {
+                    $definition .= " UNIQUE";
+                }
+
+                if (isset($column['primary']) && $column['primary']) {
+                    $primaryKeys[] = pg_escape_identifier($this->pgsql->getConnection(), $columnName);
+                }
+
+                $columnDefinitions[] = $definition;
+            }
+
+            if (empty($columnDefinitions)) {
+                throw new \Exception('At least one valid column is required');
+            }
+
+            // Add primary key constraint if specified
+            if (!empty($primaryKeys)) {
+                $columnDefinitions[] = "PRIMARY KEY (" . implode(', ', $primaryKeys) . ")";
+            }
+
+            $sql .= implode(",\n", $columnDefinitions) . "\n)";
+
+            // Execute the CREATE TABLE query
+            $result = $this->pgsql->run_query($sql);
+
+            // Set success message
+            $_SESSION['create_success'] = "Table '" . htmlspecialchars($tableName) . "' has been created successfully with " . count($columnDefinitions) . " columns.";
+            return true;
+
+        } catch (\Exception $e) {
+            $_SESSION['create_error'] = $e->getMessage();
+            return false;
+        }
+    }
+
     public function isSerialField($type)
     {
         $type = strtolower($type);
@@ -461,6 +582,7 @@ class MainView
                     <li><a href="?db=' . urlencode($this->controller->getSelectedDatabase()) . '&table=' . urlencode($table) . '&action=select"><i class="fas fa-list"></i></a></li>
                     <li><a href="?db=' . urlencode($this->controller->getSelectedDatabase()) . '&table=' . urlencode($table) . '&action=insert"><i class="fas fa-plus"></i></a></li>
                     <li><a href="?db=' . urlencode($this->controller->getSelectedDatabase()) . '&table=' . urlencode($table) . '&action=delete"><i class="fas fa-trash"></i></a></li>
+                    <li><a href="?db=' . urlencode($this->controller->getSelectedDatabase()) . '&table=' . urlencode($table) . '&action=drop" onclick="return confirmDropTable(\'' . htmlspecialchars($table) . '\')"><i class="fas fa-times-circle"></i></a></li>
                 </ul>';
             }
 
@@ -476,8 +598,9 @@ class MainView
         $selectedDb = $this->controller->getSelectedDatabase();
         $tables = $this->controller->getTables();
 
-        $html = '<div class="database-overview">
-            <div class="database-header">
+        $html = '<div class="database-overview">';
+        $html .= $this->getDropMessages();
+        $html .= '<div class="database-header">
                 <h2><i class="fas fa-database"></i> ' . htmlspecialchars($selectedDb) . '</h2>
                 <div class="database-stats">
                     <span class="stat"><i class="fas fa-table"></i> ' . count($tables) . ' Tables</span>
@@ -485,9 +608,11 @@ class MainView
             </div>
 
             <div class="database-content">
-                <div class="database-section">
-                    <h3>Tables Overview</h3>
-                    <div class="tables-grid">';
+                <!-- Top Row: Tables Overview + SQL Query -->
+                <div class="database-top-row">
+                    <div class="database-section tables-section">
+                        <h3>Tables Overview</h3>
+                        <div class="tables-grid">';
 
         if (!empty($tables)) {
             foreach ($tables as $table) {
@@ -517,22 +642,22 @@ class MainView
 
         $html .= '</div></div>
 
-                <div class="database-section">
-                    <h3>Run SQL Query</h3>
-                    <form method="POST" action="" class="sql-query-form">
-                        <input type="hidden" name="action" value="run_sql">
-                        <div class="query-input">
-                            <textarea name="sql_query" placeholder="Enter your SQL query here..." rows="8" required></textarea>
-                        </div>
-                        <div class="query-actions">
-                            <button type="submit" class="btn-primary">
-                                <i class="fas fa-play"></i> Execute Query
-                            </button>
-                            <button type="button" onclick="clearQuery()" class="btn-secondary">
-                                <i class="fas fa-times"></i> Clear
-                            </button>
-                        </div>
-                    </form>';
+                    <div class="database-section sql-section">
+                        <h3>Run SQL Query</h3>
+                        <form method="POST" action="" class="sql-query-form">
+                            <input type="hidden" name="action" value="run_sql">
+                            <div class="query-input">
+                                <textarea name="sql_query" placeholder="Enter your SQL query here..." rows="8" required></textarea>
+                            </div>
+                            <div class="query-actions">
+                                <button type="submit" class="btn-primary">
+                                    <i class="fas fa-play"></i> Execute Query
+                                </button>
+                                <button type="button" onclick="clearQuery()" class="btn-secondary">
+                                    <i class="fas fa-times"></i> Clear
+                                </button>
+                            </div>
+                        </form>';
 
         // Display query results if any
         if (isset($_SESSION['sql_result'])) {
@@ -540,7 +665,120 @@ class MainView
             unset($_SESSION['sql_result']);
         }
 
-        $html .= '</div></div></div>';
+        $html .= '</div>
+                </div>
+
+                <!-- Bottom Row: Create Table (Full Width) -->
+                <div class="database-section create-table-section">
+                    <h3>Create New Table</h3>
+                    <div class="create-table-container">
+                        <form method="POST" action="" class="create-table-form" id="create-table-form">
+                            <input type="hidden" name="action" value="create_table">
+
+                            <div class="table-name-input">
+                                <label for="table_name">Table Name:</label>
+                                <input type="text" id="table_name" name="table_name" required placeholder="Enter table name">
+                            </div>
+
+                            <div class="columns-section">
+                                <div class="columns-header">
+                                    <h4>Table Columns</h4>
+                                    <button type="button" onclick="addColumn()" class="btn-secondary btn-small">
+                                        <i class="fas fa-plus"></i> Add Column
+                                    </button>
+                                </div>
+
+                                <div id="columns-container">
+                                    <div class="column-row" data-column="1">
+                                        <div class="column-input">
+                                            <input type="text" name="columns[1][name]" placeholder="Column name" required>
+                                        </div>
+                                        <div class="column-type">
+                                            <select name="columns[1][type]" required>
+                                                <option value="">Select Type</option>
+                                                <option value="SERIAL">SERIAL</option>
+                                                <option value="BIGSERIAL">BIGSERIAL</option>
+                                                <option value="INTEGER">INTEGER</option>
+                                                <option value="BIGINT">BIGINT</option>
+                                                <option value="SMALLINT">SMALLINT</option>
+                                                <option value="VARCHAR(255)">VARCHAR(255)</option>
+                                                <option value="TEXT">TEXT</option>
+                                                <option value="BOOLEAN">BOOLEAN</option>
+                                                <option value="DATE">DATE</option>
+                                                <option value="TIME">TIME</option>
+                                                <option value="TIMESTAMP">TIMESTAMP</option>
+                                                <option value="DECIMAL(10,2)">DECIMAL(10,2)</option>
+                                                <option value="REAL">REAL</option>
+                                                <option value="DOUBLE PRECISION">DOUBLE PRECISION</option>
+                                            </select>
+                                        </div>
+                                        <div class="column-constraints">
+                                            <label><input type="checkbox" name="columns[1][primary]"> Primary Key</label>
+                                            <label><input type="checkbox" name="columns[1][not_null]"> Not Null</label>
+                                            <label><input type="checkbox" name="columns[1][unique]"> Unique</label>
+                                        </div>
+                                        <div class="column-actions">
+                                            <button type="button" onclick="removeColumn(this)" class="btn-danger btn-small" disabled>
+                                                <i class="fas fa-trash"></i>
+                                            </button>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <div class="form-actions">
+                                <button type="submit" class="btn-primary">
+                                    <i class="fas fa-table"></i> Create Table
+                                </button>
+                                <button type="reset" class="btn-secondary" onclick="resetCreateTableForm()">
+                                    <i class="fas fa-undo"></i> Reset
+                                </button>
+                            </div>
+                        </form>
+                    </div>
+                </div>
+            </div></div>';
+
+        return $html;
+    }
+
+    private function getDropMessages()
+    {
+        $html = '';
+
+        // Create table messages
+        if (isset($_SESSION['create_success'])) {
+            $html .= '<div class="alert alert-success">
+                <i class="fas fa-check-circle"></i>
+                ' . htmlspecialchars($_SESSION['create_success']) . '
+            </div>';
+            unset($_SESSION['create_success']);
+        }
+
+        if (isset($_SESSION['create_error'])) {
+            $html .= '<div class="alert alert-error">
+                <i class="fas fa-exclamation-triangle"></i>
+                Create table failed: ' . htmlspecialchars($_SESSION['create_error']) . '
+            </div>';
+            unset($_SESSION['create_error']);
+        }
+
+        // Drop table messages
+        if (isset($_SESSION['drop_success'])) {
+            $html .= '<div class="alert alert-success">
+                <i class="fas fa-check-circle"></i>
+                ' . htmlspecialchars($_SESSION['drop_success']) . '
+            </div>';
+            unset($_SESSION['drop_success']);
+        }
+
+        if (isset($_SESSION['drop_error'])) {
+            $html .= '<div class="alert alert-error">
+                <i class="fas fa-exclamation-triangle"></i>
+                Drop table failed: ' . htmlspecialchars($_SESSION['drop_error']) . '
+            </div>';
+            unset($_SESSION['drop_error']);
+        }
 
         return $html;
     }
@@ -636,6 +874,8 @@ class MainView
                 return $this->getInsertFormHtml();
             case 'delete':
                 return $this->getDeleteFormHtml();
+            case 'drop':
+                return $this->getDropTableFormHtml();
             default:
                 return '<div class="error">Unknown action</div>';
         }
@@ -787,6 +1027,44 @@ class MainView
         }
 
         $html .= '</tbody></table></div></div></form>';
+        return $html;
+    }
+
+    private function getDropTableFormHtml()
+    {
+        $selectedTable = $this->controller->getSelectedTable();
+
+        $html = '<div class="drop-table-container">
+            <h3>Drop Table</h3>
+            <div class="alert alert-danger">
+                <i class="fas fa-exclamation-triangle"></i>
+                <strong>WARNING:</strong> You are about to permanently delete the table "<strong>' . htmlspecialchars($selectedTable) . '</strong>".
+                <br><br>
+                This action will:
+                <ul>
+                    <li>Delete the entire table and all its data</li>
+                    <li>Remove all indexes and constraints</li>
+                    <li>Cannot be undone</li>
+                </ul>
+                <br>
+                Are you sure you want to proceed?
+            </div>
+
+            <form method="POST" action="" onsubmit="return confirmDropTableFinal()">
+                <input type="hidden" name="action" value="drop_table">
+                <input type="hidden" name="table_name" value="' . htmlspecialchars($selectedTable) . '">
+
+                <div class="form-actions">
+                    <button type="submit" class="btn-danger">
+                        <i class="fas fa-times-circle"></i> Yes, Drop Table
+                    </button>
+                    <a href="?db=' . urlencode($this->controller->getSelectedDatabase()) . '&table=' . urlencode($selectedTable) . '&action=select" class="btn-secondary">
+                        <i class="fas fa-arrow-left"></i> Cancel
+                    </a>
+                </div>
+            </form>
+        </div>';
+
         return $html;
     }
 
@@ -1080,14 +1358,15 @@ class MainView
         .table-actions a {
             display: block;
             padding: 6px 15px;
-            color: #7f8c8d;
+            color:rgb(68, 69, 99)!important;
+            background: #f8f9fa !important;
             text-decoration: none;
             font-size: 0.85em;
             transition: all 0.3s;
         }
 
         .table-actions a:hover {
-            color: #ecf0f1;
+            color:rgb(255, 255, 255);
             background: rgba(255,255,255,0.1);
         }
 
@@ -1278,6 +1557,202 @@ class MainView
 
         .btn-danger:hover {
             background: #c0392b;
+        }
+
+        /* Drop Table Styles */
+        .drop-table-container {
+            max-width: 600px;
+            margin: 0 auto;
+        }
+
+        .drop-table-container h3 {
+            color: #e74c3c;
+            margin-bottom: 20px;
+        }
+
+        .alert-danger {
+            background: #f8d7da;
+            border: 1px solid #f5c6cb;
+            color: #721c24;
+            padding: 20px;
+            border-radius: 8px;
+            margin-bottom: 30px;
+        }
+
+        .alert-danger strong {
+            color: #dc3545;
+        }
+
+        .alert-danger ul {
+            margin: 10px 0 0 20px;
+            padding: 0;
+        }
+
+        .alert-danger li {
+            margin-bottom: 5px;
+        }
+
+        .alert-danger i {
+            margin-right: 10px;
+            color: #dc3545;
+        }
+
+        /* Create Table Styles */
+        .create-table-container {
+            max-width: 100%;
+        }
+
+        .create-table-form {
+            display: flex;
+            flex-direction: column;
+            gap: 20px;
+        }
+
+        .table-name-input {
+            display: flex;
+            align-items: center;
+            gap: 15px;
+        }
+
+        .table-name-input label {
+            font-weight: 600;
+            min-width: 100px;
+        }
+
+        .table-name-input input {
+            flex: 1;
+            padding: 10px;
+            border: 2px solid #ecf0f1;
+            border-radius: 6px;
+            font-size: 0.9em;
+            transition: border-color 0.2s;
+        }
+
+        .table-name-input input:focus {
+            outline: none;
+            border-color: #3498db;
+        }
+
+        .columns-section {
+            border: 1px solid #ecf0f1;
+            border-radius: 8px;
+            padding: 20px;
+            background: #f8f9fa;
+        }
+
+        .columns-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 15px;
+        }
+
+        .columns-header h4 {
+            margin: 0;
+            color: #2c3e50;
+        }
+
+        .btn-small {
+            padding: 6px 12px;
+            font-size: 0.8em;
+        }
+
+        #columns-container {
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+        }
+
+        .column-row {
+            display: grid;
+            grid-template-columns: 2fr 1.5fr 2fr 80px;
+            gap: 10px;
+            align-items: center;
+            background: white;
+            padding: 15px;
+            border-radius: 6px;
+            border: 1px solid #e9ecef;
+        }
+
+        .column-input input {
+            width: 100%;
+            padding: 8px;
+            border: 1px solid #ced4da;
+            border-radius: 4px;
+            font-size: 0.9em;
+        }
+
+        .column-type select {
+            width: 100%;
+            padding: 8px;
+            border: 1px solid #ced4da;
+            border-radius: 4px;
+            font-size: 0.9em;
+            background: white;
+        }
+
+        .column-constraints {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 10px;
+        }
+
+        .column-constraints label {
+            display: flex;
+            align-items: center;
+            gap: 3px;
+            font-size: 0.8em;
+            white-space: nowrap;
+        }
+
+        .column-constraints input[type="checkbox"] {
+            margin: 0;
+        }
+
+        .column-actions {
+            display: flex;
+            justify-content: center;
+        }
+
+        .column-actions button {
+            padding: 6px 8px;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            transition: opacity 0.2s;
+        }
+
+        .column-actions button:hover:not(:disabled) {
+            opacity: 0.8;
+        }
+
+        .column-actions button:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+
+        /* Mobile responsiveness for create table */
+        @media (max-width: 768px) {
+            .column-row {
+                grid-template-columns: 1fr;
+                gap: 8px;
+            }
+
+            .column-constraints {
+                justify-content: center;
+            }
+
+            .table-name-input {
+                flex-direction: column;
+                align-items: flex-start;
+                gap: 8px;
+            }
+
+            .columns-header {
+                flex-direction: column;
+                gap: 10px;
+                align-items: flex-start;
+            }
         }
 
         .table-wrapper {
@@ -1567,6 +2042,12 @@ class MainView
         }
 
         .database-content {
+            display: flex;
+            flex-direction: column;
+            gap: 30px;
+        }
+
+        .database-top-row {
             display: grid;
             grid-template-columns: 2fr 1fr;
             gap: 30px;
@@ -1758,8 +2239,9 @@ class MainView
 
         /* Responsive Design */
         @media (max-width: 768px) {
-            .database-content {
+            .database-top-row {
                 grid-template-columns: 1fr;
+                gap: 20px;
             }
 
             .tables-grid {
@@ -1831,6 +2313,112 @@ class MainView
             }
         }
 
+        function confirmDropTable(tableName) {
+            return confirm(`Are you sure you want to drop the table "${tableName}"?\\n\\nThis action will permanently delete the table and all its data.\\n\\nThis cannot be undone!`);
+        }
+
+        function confirmDropTableFinal() {
+            const finalConfirm = prompt(\'To confirm deletion, please type "DROP" in all caps:\');
+            if (finalConfirm !== \'DROP\') {
+                alert(\'Table drop cancelled. You must type "DROP" to confirm.\');
+                return false;
+            }
+            return confirm(\'FINAL WARNING: This will permanently delete the table and ALL its data!\\n\\nClick OK to proceed or Cancel to stop.\');
+        }
+
+        let columnCounter = 1;
+
+        function addColumn() {
+            columnCounter++;
+            const container = document.getElementById(\'columns-container\');
+            const columnRow = document.createElement(\'div\');
+            columnRow.className = \'column-row\';
+            columnRow.setAttribute(\'data-column\', columnCounter);
+
+            columnRow.innerHTML = `
+                <div class="column-input">
+                    <input type="text" name="columns[${columnCounter}][name]" placeholder="Column name" required>
+                </div>
+                <div class="column-type">
+                    <select name="columns[${columnCounter}][type]" required>
+                        <option value="">Select Type</option>
+                        <option value="SERIAL">SERIAL</option>
+                        <option value="BIGSERIAL">BIGSERIAL</option>
+                        <option value="INTEGER">INTEGER</option>
+                        <option value="BIGINT">BIGINT</option>
+                        <option value="SMALLINT">SMALLINT</option>
+                        <option value="VARCHAR(255)">VARCHAR(255)</option>
+                        <option value="TEXT">TEXT</option>
+                        <option value="BOOLEAN">BOOLEAN</option>
+                        <option value="DATE">DATE</option>
+                        <option value="TIME">TIME</option>
+                        <option value="TIMESTAMP">TIMESTAMP</option>
+                        <option value="DECIMAL(10,2)">DECIMAL(10,2)</option>
+                        <option value="REAL">REAL</option>
+                        <option value="DOUBLE PRECISION">DOUBLE PRECISION</option>
+                    </select>
+                </div>
+                <div class="column-constraints">
+                    <label><input type="checkbox" name="columns[${columnCounter}][primary]"> Primary Key</label>
+                    <label><input type="checkbox" name="columns[${columnCounter}][not_null]"> Not Null</label>
+                    <label><input type="checkbox" name="columns[${columnCounter}][unique]"> Unique</label>
+                </div>
+                <div class="column-actions">
+                    <button type="button" onclick="removeColumn(this)" class="btn-danger btn-small">
+                        <i class="fas fa-trash"></i>
+                    </button>
+                </div>
+            `;
+
+            container.appendChild(columnRow);
+            updateRemoveButtons();
+        }
+
+        function removeColumn(button) {
+            const columnRow = button.closest(\'.column-row\');
+            if (columnRow) {
+                columnRow.remove();
+                updateRemoveButtons();
+            }
+        }
+
+        function updateRemoveButtons() {
+            const columnRows = document.querySelectorAll(\'.column-row\');
+            const removeButtons = document.querySelectorAll(\'.column-actions button\');
+
+            // Enable all remove buttons if there are more than 1 column
+            removeButtons.forEach(button => {
+                button.disabled = columnRows.length <= 1;
+            });
+        }
+
+        function resetCreateTableForm() {
+            // Reset form
+            const form = document.getElementById(\'create-table-form\');
+            if (form) {
+                form.reset();
+            }
+
+            // Reset column counter
+            columnCounter = 1;
+
+            // Remove all additional columns except the first one
+            const container = document.getElementById(\'columns-container\');
+            const columnRows = container.querySelectorAll(\'.column-row\');
+
+            // Keep only the first column
+            for (let i = 1; i < columnRows.length; i++) {
+                columnRows[i].remove();
+            }
+
+            // Reset the first column data attribute
+            if (columnRows.length > 0) {
+                columnRows[0].setAttribute(\'data-column\', \'1\');
+            }
+
+            updateRemoveButtons();
+        }
+
         function resetForm() {
             // Reset all radio buttons to auto-increment
             const radios = document.querySelectorAll(\'input[type="radio"][value="auto"]\');
@@ -1852,6 +2440,7 @@ class MainView
         // Initialize on page load
         document.addEventListener(\'DOMContentLoaded\', function() {
             updateSelectionCount();
+            updateRemoveButtons();
         });
         ';
     }
@@ -1877,6 +2466,14 @@ class Main {
 
     public function processDeleteRows() {
         return $this->controller->processDeleteRows();
+    }
+
+    public function processDropTable() {
+        return $this->controller->processDropTable();
+    }
+
+    public function processCreateTable() {
+        return $this->controller->processCreateTable();
     }
 
     // Delegate getters to controller for backward compatibility
