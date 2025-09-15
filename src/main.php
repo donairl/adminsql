@@ -91,7 +91,7 @@ class MainController
                 $_SESSION['password']
             );
 
-            $this->tables = $this->pgsql->show_tables();
+            $this->tables = $this->pgsql->show_table();
         } catch (\Exception $e) {
             $this->tables = [];
         }
