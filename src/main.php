@@ -1887,8 +1887,18 @@ class Main {
 
     // Property access delegation for backward compatibility
     public function __get($property) {
+        // First try to use getter method if it exists
+        $getterMethod = 'get' . ucfirst($property);
+        if (method_exists($this->controller, $getterMethod)) {
+            return $this->controller->$getterMethod();
+        }
+
+        // Fall back to direct property access if property exists and is accessible
         if (property_exists($this->controller, $property)) {
-            return $this->controller->$property;
+            $reflection = new \ReflectionProperty($this->controller, $property);
+            if ($reflection->isPublic()) {
+                return $this->controller->$property;
+            }
         }
         return null;
     }
