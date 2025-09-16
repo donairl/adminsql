@@ -1,4 +1,4 @@
-# CloneSQL
+# AdminSQL
 
 A web-based PostgreSQL database management tool built with PHP. CloneSQL provides an intuitive interface for managing PostgreSQL databases, executing SQL queries, and performing common database operations.
 
@@ -115,6 +115,9 @@ The application uses object-oriented PHP with namespaced classes:
 
 - Modern browsers with JavaScript enabled
 - Responsive design for various screen sizes
+
+## TO DO
+- Add Mysql support
 
 ## License
 
