@@ -1638,7 +1638,10 @@ class MainView
         .delete-all-actions .btn-danger {
             min-width: 180px;
             font-weight: 500;
+            min-height: 50px;
         }
+        
+        
 
         .delete-all-actions form {
             display: inline-block;
