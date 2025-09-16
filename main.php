@@ -60,7 +60,21 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
         // Always redirect back to show results
         header('Location: ' . $_SERVER['REQUEST_URI']);
         exit;
+    } elseif ($_POST['action'] === 'delete_all_records') {
+        $success = $main->processDeleteAllRecords();
+        if ($success) {
+            // Redirect with success message
+            $redirectUrl = preg_replace('/&deleted=\d+/', '', $_SERVER['REQUEST_URI']);
+            header('Location: ' . $redirectUrl . '&deleted=' . $main->deleteSuccessCount);
+            exit;
+        }
     }
+}
+
+// Handle GET requests for delete action (direct URL access)
+if ($_SERVER['REQUEST_METHOD'] === 'GET' && isset($_GET['action']) && $_GET['action'] === 'delete') {
+    // This will be handled by the Main class constructor and loadTableAction()
+    // The UI will show the delete confirmation interface
 }
 
 echo $main->getHtml();

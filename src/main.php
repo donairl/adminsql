@@ -130,6 +130,10 @@ class MainController
             case 'insert':
                 // No additional loading needed for insert form
                 break;
+            case 'delete':
+                // Load table data for delete confirmation UI
+                $this->loadTableData();
+                break;
         }
     }
 
@@ -294,6 +298,47 @@ class MainController
                 return true;
             } else {
                 throw new \Exception('No rows were deleted');
+            }
+
+        } catch (\Exception $e) {
+            $this->deleteError = $e->getMessage();
+            return false;
+        }
+    }
+
+    public function processDeleteAllRecords()
+    {
+        try {
+            // Ensure we're connected to the correct database
+            $this->pgsql->connect(
+                $_SESSION['host'] ?? 'localhost',
+                $_SESSION['port'] ?? 5432,
+                $this->selectedDatabase,
+                $_SESSION['username'],
+                $_SESSION['password']
+            );
+
+            if (!$this->selectedTable) {
+                throw new \Exception('No table selected for deletion');
+            }
+
+            // Get row count before deletion for confirmation
+            $countQuery = "SELECT COUNT(*) as total FROM " . pg_escape_identifier($this->pgsql->getConnection(), $this->selectedTable);
+            $countResult = $this->pgsql->run_query($countQuery);
+            $rowCount = pg_fetch_result($countResult, 0, 'total');
+
+            // Execute DELETE ALL query
+            $query = "DELETE FROM " . pg_escape_identifier($this->pgsql->getConnection(), $this->selectedTable);
+            $result = $this->pgsql->run_query($query);
+
+            // Get affected row count
+            $affectedRows = pg_affected_rows($result);
+
+            if ($affectedRows >= 0) {
+                $this->deleteSuccessCount = $affectedRows;
+                return true;
+            } else {
+                throw new \Exception('Failed to delete records');
             }
 
         } catch (\Exception $e) {
@@ -975,58 +1020,34 @@ class MainView
     {
         $data = $this->controller->getTableData();
         $structure = $this->controller->getTableStructure();
+        $selectedTable = $this->controller->getSelectedTable();
 
         $html = $this->getDeleteMessages();
 
-        if (empty($data)) {
-            $html .= '<div class="no-data">No data found in this table to delete</div>';
-            return $html;
-        }
-
-        $html .= '<form method="POST" action="" onsubmit="return confirmDelete()">
-            <input type="hidden" name="action" value="delete_rows">
-            <div class="delete-form-container">
-                <h3>Delete Records</h3>
-                <p class="warning-text">
-                    <i class="fas fa-exclamation-triangle"></i>
-                    Warning: Selected records will be permanently deleted. This action cannot be undone.
-                </p>
-                <div class="table-actions">
-                    <button type="button" onclick="toggleAllCheckboxes()" class="btn-secondary">
-                        <i class="fas fa-check-square"></i> Select All
-                    </button>
-                    <button type="submit" class="btn-danger">
-                        <i class="fas fa-trash"></i> Delete Selected (<span id="selection-count">0</span>)
-                    </button>
+        // Show delete all confirmation interface
+        $html .= '<div class="delete-all-container">
+            <div class="delete-all-warning">
+                <h3><i class="fas fa-exclamation-triangle"></i> Delete All Records</h3>
+                <div class="warning-content">
+                    <p><strong>Warning:</strong> You are about to delete <strong>ALL</strong> records from the table <strong>"' . htmlspecialchars($selectedTable) . '"</strong>.</p>
+                    <p>This action will permanently delete <strong>' . count($data) . '</strong> records and cannot be undone.</p>
+                    <p>Are you sure you want to proceed?</p>
                 </div>
-                <div class="table-wrapper">
-                    <table class="data-table">
-                        <thead>
-                            <tr>
-                                <th><input type="checkbox" id="select-all" onchange="toggleAllCheckboxes()"></th>';
 
-        foreach ($structure as $field) {
-            $html .= '<th>' . htmlspecialchars($field['name']) . '</th>';
-        }
+                <div class="delete-all-actions">
+                    <a href="?db=' . urlencode($this->controller->getSelectedDatabase()) . '&table=' . urlencode($selectedTable) . '&action=select" class="btn-secondary">
+                        <i class="fas fa-arrow-left"></i> Cancel
+                    </a>
+                    <form method="POST" action="" style="display: inline;" onsubmit="return confirmDeleteAll()">
+                        <input type="hidden" name="action" value="delete_all_records">
+                        <button type="submit" class="btn-danger">
+                            <i class="fas fa-trash"></i> Yes, Delete All Records
+                        </button>
+                    </form>
+                </div>
+            </div>
+        </div>';
 
-        $html .= '</tr></thead><tbody>';
-
-        foreach ($data as $row) {
-            $firstValue = reset($row); // Get first column value for checkbox
-            $html .= '<tr>
-                <td><input type="checkbox" name="selected_rows[]" value="' . htmlspecialchars($firstValue) . '" onchange="updateSelectionCount()"></td>';
-
-            foreach ($structure as $field) {
-                $fieldName = $field['name'];
-                $value = $row[$fieldName] ?? '';
-                $displayValue = is_null($value) ? '<em>NULL</em>' : htmlspecialchars($value);
-                $html .= '<td>' . $displayValue . '</td>';
-            }
-
-            $html .= '</tr>';
-        }
-
-        $html .= '</tbody></table></div></div></form>';
         return $html;
     }
 
@@ -1557,6 +1578,97 @@ class MainView
 
         .btn-danger:hover {
             background: #c0392b;
+        }
+
+        /* Delete All Records Styles */
+        .delete-all-container {
+            max-width: 700px;
+            margin: 20px auto;
+            background: white;
+            border-radius: 8px;
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+            overflow: hidden;
+            border: 1px solid #e1e8ed;
+        }
+
+        .delete-all-warning {
+            padding: 30px;
+            text-align: center;
+        }
+
+        .delete-all-warning h3 {
+            color: #e74c3c;
+            margin: 0 0 20px 0;
+            font-size: 24px;
+            font-weight: 600;
+        }
+
+        .delete-all-warning h3 i {
+            margin-right: 10px;
+        }
+
+        .warning-content {
+            background: #fff5f5;
+            border: 1px solid #fed7d7;
+            border-radius: 6px;
+            padding: 20px;
+            margin: 20px 0;
+        }
+
+        .warning-content p {
+            margin: 10px 0;
+            color: #2d3748;
+            line-height: 1.6;
+        }
+
+        .warning-content p strong {
+            color: #e53e3e;
+            font-weight: 600;
+        }
+
+        .delete-all-actions {
+            display: flex;
+            gap: 15px;
+            justify-content: center;
+            margin-top: 30px;
+            flex-wrap: wrap;
+        }
+
+        .delete-all-actions .btn-secondary,
+        .delete-all-actions .btn-danger {
+            min-width: 180px;
+            font-weight: 500;
+        }
+
+        .delete-all-actions form {
+            display: inline-block;
+        }
+
+        /* Responsive design for mobile */
+        @media (max-width: 768px) {
+            .delete-all-container {
+                margin: 10px;
+                max-width: none;
+            }
+
+            .delete-all-warning {
+                padding: 20px;
+            }
+
+            .delete-all-warning h3 {
+                font-size: 20px;
+            }
+
+            .delete-all-actions {
+                flex-direction: column;
+                align-items: center;
+            }
+
+            .delete-all-actions .btn-secondary,
+            .delete-all-actions .btn-danger {
+                width: 100%;
+                max-width: 250px;
+            }
         }
 
         /* Drop Table Styles */
@@ -2303,6 +2415,10 @@ class MainView
             }
 
             return confirm(`Are you sure you want to delete ${checkboxes.length} selected row(s)? This action cannot be undone.`);
+        }
+
+        function confirmDeleteAll() {
+            return confirm(\'FINAL WARNING: You are about to delete ALL records from this table.\\n\\nThis action cannot be undone!\\n\\nClick OK to proceed or Cancel to stop.\');
         }
 
         function clearQuery() {
