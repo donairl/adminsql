@@ -8,6 +8,7 @@ class MainController
     private $selectedDatabase;
     private $selectedTable;
     private $selectedAction;
+    private $selectedSubAction; // Add subaction property
     private $currentPage;
     private $perPage;
     private $tableStructure;
@@ -18,6 +19,7 @@ class MainController
     private $insertSuccess;
     private $deleteError;
     private $deleteSuccessCount;
+    private $structureMessage; // Add message property for structure operations
 
     public function __construct($connectionData)
     {
@@ -27,6 +29,7 @@ class MainController
         $this->selectedDatabase = $_GET['db'] ?? $connectionData['database'] ?? 'postgres';
         $this->selectedTable = $_GET['table'] ?? null;
         $this->selectedAction = $_GET['action'] ?? 'select';
+        $this->selectedSubAction = $_GET['subaction'] ?? null; // Initialize subaction
         $this->currentPage = (int)($_GET['page'] ?? 1);
         $this->perPage = 25; // Items per page for data browsing
 
@@ -36,6 +39,7 @@ class MainController
 
         $this->insertError = null;
         $this->deleteError = null;
+        $this->structureMessage = null; // Initialize structure message
 
         // Load initial data
         $this->loadDatabases();
@@ -50,6 +54,7 @@ class MainController
     public function getSelectedDatabase() { return $this->selectedDatabase; }
     public function getSelectedTable() { return $this->selectedTable; }
     public function getSelectedAction() { return $this->selectedAction; }
+    public function getSelectedSubAction() { return $this->selectedSubAction; } // Add getter for subaction
     public function getCurrentPage() { return $this->currentPage; }
     public function getPerPage() { return $this->perPage; }
     public function getTableStructure() { return $this->tableStructure; }
@@ -60,6 +65,7 @@ class MainController
     public function getInsertSuccess() { return $this->insertSuccess; }
     public function getDeleteError() { return $this->deleteError; }
     public function getDeleteSuccessCount() { return $this->deleteSuccessCount; }
+    public function getStructureMessage() { return $this->structureMessage; } // Add getter for structure message
 
     private function loadDatabases()
     {
@@ -518,6 +524,160 @@ class MainController
             return false;
         }
     }
+
+    /**
+     * Process add field form submission
+     */
+    public function processAddField()
+    {
+        try {
+            // Ensure we're connected to the correct database
+            $this->pgsql->connect(
+                $_SESSION['host'] ?? 'localhost',
+                $_SESSION['port'] ?? 5432,
+                $this->selectedDatabase,
+                $_SESSION['username'],
+                $_SESSION['password']
+            );
+
+            if (!isset($_POST['field_name']) || empty(trim($_POST['field_name']))) {
+                throw new \Exception('Field name is required');
+            }
+
+            if (!isset($_POST['field_type']) || empty(trim($_POST['field_type']))) {
+                throw new \Exception('Field type is required');
+            }
+
+            $fieldName = trim($_POST['field_name']);
+            $fieldType = trim($_POST['field_type']);
+            $isNullable = isset($_POST['is_nullable']) && $_POST['is_nullable'] == '1';
+            $defaultValue = isset($_POST['default_value']) ? trim($_POST['default_value']) : null;
+
+            // Validate field name
+            if (!preg_match('/^[a-zA-Z_][a-zA-Z0-9_]*$/', $fieldName)) {
+                throw new \Exception('Invalid field name. Use only letters, numbers, and underscores, starting with a letter or underscore.');
+            }
+
+            // Build ALTER TABLE SQL
+            $sql = "ALTER TABLE " . pg_escape_identifier($this->pgsql->getConnection(), $this->selectedTable) . 
+                   " ADD COLUMN " . pg_escape_identifier($this->pgsql->getConnection(), $fieldName) . " " . $fieldType;
+
+            // Add NULL/NOT NULL constraint
+            if (!$isNullable) {
+                $sql .= " NOT NULL";
+            }
+
+            // Add default value if provided
+            if ($defaultValue !== null && $defaultValue !== '') {
+                $sql .= " DEFAULT '" . pg_escape_string($this->pgsql->getConnection(), $defaultValue) . "'";
+            }
+
+            // Execute the ALTER TABLE query
+            $result = $this->pgsql->run_query($sql);
+
+            // Set success message
+            $this->structureMessage = [
+                'type' => 'success',
+                'text' => "Field '" . htmlspecialchars($fieldName) . "' has been added successfully."
+            ];
+            return true;
+
+        } catch (\Exception $e) {
+            $this->structureMessage = [
+                'type' => 'error',
+                'text' => 'Add field failed: ' . $e->getMessage()
+            ];
+            return false;
+        }
+    }
+
+    /**
+     * Process edit field form submission
+     */
+    public function processEditField()
+    {
+        try {
+            // Ensure we're connected to the correct database
+            $this->pgsql->connect(
+                $_SESSION['host'] ?? 'localhost',
+                $_SESSION['port'] ?? 5432,
+                $this->selectedDatabase,
+                $_SESSION['username'],
+                $_SESSION['password']
+            );
+
+            if (!isset($_POST['original_field_name']) || empty(trim($_POST['original_field_name']))) {
+                throw new \Exception('Original field name is required');
+            }
+
+            if (!isset($_POST['field_name']) || empty(trim($_POST['field_name']))) {
+                throw new \Exception('Field name is required');
+            }
+
+            if (!isset($_POST['field_type']) || empty(trim($_POST['field_type']))) {
+                throw new \Exception('Field type is required');
+            }
+
+            $originalFieldName = trim($_POST['original_field_name']);
+            $fieldName = trim($_POST['field_name']);
+            $fieldType = trim($_POST['field_type']);
+            $isNullable = isset($_POST['is_nullable']) && $_POST['is_nullable'] == '1';
+            $defaultValue = isset($_POST['default_value']) ? trim($_POST['default_value']) : null;
+
+            // Validate field name
+            if (!preg_match('/^[a-zA-Z_][a-zA-Z0-9_]*$/', $fieldName)) {
+                throw new \Exception('Invalid field name. Use only letters, numbers, and underscores, starting with a letter or underscore.');
+            }
+
+            // Check if field name is being changed
+            if ($originalFieldName !== $fieldName) {
+                // Rename the column first
+                $renameSql = "ALTER TABLE " . pg_escape_identifier($this->pgsql->getConnection(), $this->selectedTable) . 
+                             " RENAME COLUMN " . pg_escape_identifier($this->pgsql->getConnection(), $originalFieldName) . 
+                             " TO " . pg_escape_identifier($this->pgsql->getConnection(), $fieldName);
+                $this->pgsql->run_query($renameSql);
+            }
+
+            // Change the column type
+            $typeSql = "ALTER TABLE " . pg_escape_identifier($this->pgsql->getConnection(), $this->selectedTable) . 
+                       " ALTER COLUMN " . pg_escape_identifier($this->pgsql->getConnection(), $fieldName) . 
+                       " TYPE " . $fieldType;
+            $this->pgsql->run_query($typeSql);
+
+            // Set NULL/NOT NULL constraint
+            $nullSql = "ALTER TABLE " . pg_escape_identifier($this->pgsql->getConnection(), $this->selectedTable) . 
+                       " ALTER COLUMN " . pg_escape_identifier($this->pgsql->getConnection(), $fieldName) . 
+                       ($isNullable ? " DROP NOT NULL" : " SET NOT NULL");
+            $this->pgsql->run_query($nullSql);
+
+            // Set or drop default value
+            if ($defaultValue !== null && $defaultValue !== '') {
+                $defaultSql = "ALTER TABLE " . pg_escape_identifier($this->pgsql->getConnection(), $this->selectedTable) . 
+                              " ALTER COLUMN " . pg_escape_identifier($this->pgsql->getConnection(), $fieldName) . 
+                              " SET DEFAULT '" . pg_escape_string($this->pgsql->getConnection(), $defaultValue) . "'";
+                $this->pgsql->run_query($defaultSql);
+            } else {
+                $defaultSql = "ALTER TABLE " . pg_escape_identifier($this->pgsql->getConnection(), $this->selectedTable) . 
+                              " ALTER COLUMN " . pg_escape_identifier($this->pgsql->getConnection(), $fieldName) . 
+                              " DROP DEFAULT";
+                $this->pgsql->run_query($defaultSql);
+            }
+
+            // Set success message
+            $this->structureMessage = [
+                'type' => 'success',
+                'text' => "Field '" . htmlspecialchars($fieldName) . "' has been updated successfully."
+            ];
+            return true;
+
+        } catch (\Exception $e) {
+            $this->structureMessage = [
+                'type' => 'error',
+                'text' => 'Edit field failed: ' . $e->getMessage()
+            ];
+            return false;
+        }
+    }
 }
 
 class MainView
@@ -929,14 +1089,52 @@ class MainView
     private function getTableStructureHtml()
     {
         $structure = $this->controller->getTableStructure();
+        $subAction = $this->controller->getSelectedSubAction();
+        $selectedTable = $this->controller->getSelectedTable();
 
         if (empty($structure)) {
             return '<div class="error">Unable to load table structure</div>';
         }
 
         $html = '<div class="structure-container">
-            <h3>Table Structure</h3>
-            <div class="structure-table-wrapper">
+            <h3>Table Structure</h3>';
+
+        // Add structure messages if any
+        $structureMessage = $this->controller->getStructureMessage();
+        if ($structureMessage) {
+            $html .= '<div class="alert alert-' . $structureMessage['type'] . '">
+                <i class="fas fa-' . ($structureMessage['type'] === 'success' ? 'check-circle' : 'exclamation-triangle') . '"></i>
+                ' . htmlspecialchars($structureMessage['text']) . '
+            </div>';
+        }
+
+        // Show subaction forms if needed
+        if ($subAction === 'add_field') {
+            $html .= $this->getAddFieldForm();
+        } elseif ($subAction === 'edit_field' && isset($_GET['field'])) {
+            $fieldName = $_GET['field'];
+            // Find the field in structure
+            $fieldData = null;
+            foreach ($structure as $field) {
+                if ($field['name'] === $fieldName) {
+                    $fieldData = $field;
+                    break;
+                }
+            }
+            if ($fieldData) {
+                $html .= $this->getEditFieldForm($fieldData);
+            } else {
+                $html .= '<div class="error">Field not found</div>';
+            }
+        } else {
+            // Show regular structure table with action buttons
+            $html .= '<div class="structure-actions">
+                <a href="?db=' . urlencode($this->controller->getSelectedDatabase()) . '&table=' . urlencode($selectedTable) . '&action=structure&subaction=add_field" class="btn-primary">
+                    <i class="fas fa-plus"></i> Add New Field
+                </a>
+            </div>';
+
+            $html .= '<div class="structure-table-wrapper">
                 <table class="structure-table">
                     <thead>
                         <tr>
@@ -944,20 +1142,29 @@ class MainView
                             <th>Type</th>
                             <th>Nullable</th>
                             <th>Default</th>
+                            <th>Actions</th>
                         </tr>
                     </thead>
                     <tbody>';
 
-        foreach ($structure as $field) {
-            $html .= '<tr>
-                <td><strong>' . htmlspecialchars($field['name']) . '</strong></td>
-                <td>' . htmlspecialchars($field['type']) . '</td>
-                <td>' . ($field['nullable'] ? 'YES' : 'NO') . '</td>
-                <td>' . htmlspecialchars($field['default'] ?? 'NULL') . '</td>
-            </tr>';
+            foreach ($structure as $field) {
+                $html .= '<tr>
+                    <td><strong>' . htmlspecialchars($field['name']) . '</strong></td>
+                    <td>' . htmlspecialchars($field['type']) . '</td>
+                    <td>' . ($field['nullable'] ? 'YES' : 'NO') . '</td>
+                    <td>' . htmlspecialchars($field['default'] ?? 'NULL') . '</td>
+                    <td>
+                        <a href="?db=' . urlencode($this->controller->getSelectedDatabase()) . '&table=' . urlencode($selectedTable) . '&action=structure&subaction=edit_field&field=' . urlencode($field['name']) . '" class="btn-secondary btn-small">
+                            <i class="fas fa-edit"></i> Edit
+                        </a>
+                    </td>
+                </tr>';
+            }
+
+            $html .= '</tbody></table></div>';
         }
 
-        $html .= '</tbody></table></div></div>';
+        $html .= '</div>';
         return $html;
     }
 
@@ -1266,6 +1473,133 @@ class MainView
                 Delete failed: ' . htmlspecialchars($this->controller->getDeleteError()) . '
             </div>';
         }
+
+        return $html;
+    }
+
+    /**
+     * Get the HTML form for adding a new field
+     */
+    private function getAddFieldForm()
+    {
+        $selectedDatabase = $this->controller->getSelectedDatabase();
+        $selectedTable = $this->controller->getSelectedTable();
+
+        $html = '<div class="add-field-form">
+            <h3>Add New Field</h3>
+            <form method="POST" action="">
+                <input type="hidden" name="action" value="add_field">
+                <div class="form-grid">
+                    <div class="form-field">
+                        <label class="form-label" for="field_name">Field Name</label>
+                        <input type="text" id="field_name" name="field_name" class="form-control" required placeholder="Enter field name">
+                    </div>
+                    <div class="form-field">
+                        <label class="form-label" for="field_type">Field Type</label>
+                        <select id="field_type" name="field_type" class="form-control" required>
+                            <option value="">Select Type</option>
+                            <option value="SERIAL">SERIAL</option>
+                            <option value="BIGSERIAL">BIGSERIAL</option>
+                            <option value="INTEGER">INTEGER</option>
+                            <option value="BIGINT">BIGINT</option>
+                            <option value="SMALLINT">SMALLINT</option>
+                            <option value="VARCHAR(255)">VARCHAR(255)</option>
+                            <option value="TEXT">TEXT</option>
+                            <option value="BOOLEAN">BOOLEAN</option>
+                            <option value="DATE">DATE</option>
+                            <option value="TIME">TIME</option>
+                            <option value="TIMESTAMP">TIMESTAMP</option>
+                            <option value="DECIMAL(10,2)">DECIMAL(10,2)</option>
+                            <option value="REAL">REAL</option>
+                            <option value="DOUBLE PRECISION">DOUBLE PRECISION</option>
+                        </select>
+                    </div>
+                    <div class="form-field">
+                        <label class="form-label">
+                            <input type="checkbox" name="is_nullable" value="1"> Nullable
+                        </label>
+                    </div>
+                    <div class="form-field">
+                        <label class="form-label" for="default_value">Default Value (optional)</label>
+                        <input type="text" id="default_value" name="default_value" class="form-control" placeholder="Enter default value">
+                    </div>
+                </div>
+                <div class="form-actions">
+                    <button type="submit" class="btn-primary">
+                        <i class="fas fa-plus"></i> Add Field
+                    </button>
+                    <a href="?db=' . urlencode($selectedDatabase) . '&table=' . urlencode($selectedTable) . '&action=structure" class="btn-secondary">
+                        <i class="fas fa-arrow-left"></i> Cancel
+                    </a>
+                </div>
+            </form>
+        </div>';
+
+        return $html;
+    }
+
+    /**
+     * Get the HTML form for editing an existing field
+     */
+    private function getEditFieldForm($fieldData)
+    {
+        $selectedDatabase = $this->controller->getSelectedDatabase();
+        $selectedTable = $this->controller->getSelectedTable();
+        $fieldName = $fieldData['name'];
+        $fieldType = $fieldData['type'];
+        $isNullable = $fieldData['nullable'];
+        $defaultValue = $fieldData['default'] ?? '';
+
+        $html = '<div class="edit-field-form">
+            <h3>Edit Field: ' . htmlspecialchars($fieldName) . '</h3>
+            <form method="POST" action="">
+                <input type="hidden" name="action" value="edit_field">
+                <input type="hidden" name="original_field_name" value="' . htmlspecialchars($fieldName) . '">
+                <div class="form-grid">
+                    <div class="form-field">
+                        <label class="form-label" for="field_name">Field Name</label>
+                        <input type="text" id="field_name" name="field_name" class="form-control" required placeholder="Enter field name" value="' . htmlspecialchars($fieldName) . '">
+                    </div>
+                    <div class="form-field">
+                        <label class="form-label" for="field_type">Field Type</label>
+                        <select id="field_type" name="field_type" class="form-control" required>
+                            <option value="">Select Type</option>
+                            <option value="SERIAL"' . ($fieldType === 'serial' ? ' selected' : '') . '>SERIAL</option>
+                            <option value="BIGSERIAL"' . ($fieldType === 'bigserial' ? ' selected' : '') . '>BIGSERIAL</option>
+                            <option value="INTEGER"' . ($fieldType === 'integer' ? ' selected' : '') . '>INTEGER</option>
+                            <option value="BIGINT"' . ($fieldType === 'bigint' ? ' selected' : '') . '>BIGINT</option>
+                            <option value="SMALLINT"' . ($fieldType === 'smallint' ? ' selected' : '') . '>SMALLINT</option>
+                            <option value="VARCHAR(255)"' . (strpos($fieldType, 'character varying') !== false ? ' selected' : '') . '>VARCHAR(255)</option>
+                            <option value="TEXT"' . ($fieldType === 'text' ? ' selected' : '') . '>TEXT</option>
+                            <option value="BOOLEAN"' . ($fieldType === 'boolean' ? ' selected' : '') . '>BOOLEAN</option>
+                            <option value="DATE"' . ($fieldType === 'date' ? ' selected' : '') . '>DATE</option>
+                            <option value="TIME"' . ($fieldType === 'time without time zone' ? ' selected' : '') . '>TIME</option>
+                            <option value="TIMESTAMP"' . ($fieldType === 'timestamp without time zone' ? ' selected' : '') . '>TIMESTAMP</option>
+                            <option value="DECIMAL(10,2)"' . (strpos($fieldType, 'numeric') !== false ? ' selected' : '') . '>DECIMAL(10,2)</option>
+                            <option value="REAL"' . ($fieldType === 'real' ? ' selected' : '') . '>REAL</option>
+                            <option value="DOUBLE PRECISION"' . ($fieldType === 'double precision' ? ' selected' : '') . '>DOUBLE PRECISION</option>
+                        </select>
+                    </div>
+                    <div class="form-field">
+                        <label class="form-label">
+                            <input type="checkbox" name="is_nullable" value="1"' . ($isNullable ? ' checked' : '') . '> Nullable
+                        </label>
+                    </div>
+                    <div class="form-field">
+                        <label class="form-label" for="default_value">Default Value (optional)</label>
+                        <input type="text" id="default_value" name="default_value" class="form-control" placeholder="Enter default value" value="' . htmlspecialchars($defaultValue) . '">
+                    </div>
+                </div>
+                <div class="form-actions">
+                    <button type="submit" class="btn-primary">
+                        <i class="fas fa-save"></i> Save Changes
+                    </button>
+                    <a href="?db=' . urlencode($selectedDatabase) . '&table=' . urlencode($selectedTable) . '&action=structure" class="btn-secondary">
+                        <i class="fas fa-arrow-left"></i> Cancel
+                    </a>
+                </div>
+            </form>
+        </div>';
 
         return $html;
     }
@@ -2120,6 +2454,43 @@ class MainView
             padding: 20px;
         }
 
+        /* Structure Actions */
+        .structure-actions {
+            margin-bottom: 20px;
+        }
+
+        .structure-actions .btn-primary {
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        /* Add/Edit Field Forms */
+        .add-field-form,
+        .edit-field-form {
+            background: white;
+            border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+            padding: 30px;
+            margin-bottom: 30px;
+        }
+
+        .add-field-form h3,
+        .edit-field-form h3 {
+            color: #2c3e50;
+            margin-bottom: 20px;
+            font-size: 1.3em;
+        }
+
+        .btn-small {
+            padding: 6px 12px;
+            font-size: 0.85em;
+        }
+
+        .btn-small i {
+            font-size: 0.9em;
+        }
+
         .database-header {
             display: flex;
             justify-content: space-between;
@@ -2433,7 +2804,11 @@ class MainView
         }
 
         function confirmDropTable(tableName) {
-            return confirm(`Are you sure you want to drop the table "${tableName}"?\\n\\nThis action will permanently delete the table and all its data.\\n\\nThis cannot be undone!`);
+            return confirm(`Are you sure you want to drop the table "${tableName}"?
+
+This action will permanently delete the table and all its data.
+
+This cannot be undone!`);
         }
 
         function confirmDropTableFinal() {
@@ -2593,6 +2968,22 @@ class Main {
 
     public function processCreateTable() {
         return $this->controller->processCreateTable();
+    }
+
+    public function processSqlQuery() {
+        return $this->controller->processSqlQuery();
+    }
+
+    public function processDeleteAllRecords() {
+        return $this->controller->processDeleteAllRecords();
+    }
+
+    public function processAddField() {
+        return $this->controller->processAddField();
+    }
+
+    public function processEditField() {
+        return $this->controller->processEditField();
     }
 
     // Delegate getters to controller for backward compatibility

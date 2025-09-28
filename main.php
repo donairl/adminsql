@@ -68,6 +68,16 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             header('Location: ' . $redirectUrl . '&deleted=' . $main->deleteSuccessCount);
             exit;
         }
+    } elseif ($_POST['action'] === 'add_field') {
+        $success = $main->processAddField();
+        // Refresh the structure page to show the new field
+        header('Location: ' . $_SERVER['REQUEST_URI']);
+        exit;
+    } elseif ($_POST['action'] === 'edit_field') {
+        $success = $main->processEditField();
+        // Refresh the structure page to show the updated field
+        header('Location: ' . $_SERVER['REQUEST_URI']);
+        exit;
     }
 }
 
