@@ -124,7 +124,7 @@ class Pgsql {
      *
      * @param string $query
      * @param array $params Optional parameters for parameterized queries
-     * @return array
+     * @return array|resource
      */
     public function run_query($query, $params = []) {
         if (!$this->connection) {
@@ -144,6 +144,11 @@ class Pgsql {
 
         if (!$result) {
             throw new \Exception("Failed to execute query: " . pg_last_error($this->connection));
+        }
+
+        // For non-SELECT queries, return the result resource directly
+        if (stripos(trim($query), 'SELECT') !== 0) {
+            return $result;
         }
 
         $rows = [];
