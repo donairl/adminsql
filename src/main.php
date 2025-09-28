@@ -2306,6 +2306,7 @@ class MainView
             color: #bdc3c7;
             text-decoration: none;
             transition: all 0.3s;
+            border-radius: 8px;
         }
 
         .database-item a:hover {
