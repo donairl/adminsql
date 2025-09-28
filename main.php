@@ -78,6 +78,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
         // Refresh the structure page to show the updated field
         header('Location: ' . $_SERVER['REQUEST_URI']);
         exit;
+    } elseif ($_POST['action'] === 'delete_field') {
+        $success = $main->processDeleteField();
+        // Refresh the structure page to show the updated field
+        header('Location: ' . $_SERVER['REQUEST_URI']);
+        exit;
     }
 }
 

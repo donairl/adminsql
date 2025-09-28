@@ -678,6 +678,55 @@ class MainController
             return false;
         }
     }
+
+    /**
+     * Process delete field form submission
+     */
+    public function processDeleteField()
+    {
+        try {
+            // Ensure we're connected to the correct database
+            $this->pgsql->connect(
+                $_SESSION['host'] ?? 'localhost',
+                $_SESSION['port'] ?? 5432,
+                $this->selectedDatabase,
+                $_SESSION['username'],
+                $_SESSION['password']
+            );
+
+            if (!isset($_POST['field_name']) || empty(trim($_POST['field_name']))) {
+                throw new \Exception('Field name is required');
+            }
+
+            $fieldName = trim($_POST['field_name']);
+
+            // Validate field name
+            if (!preg_match('/^[a-zA-Z_][a-zA-Z0-9_]*$/', $fieldName)) {
+                throw new \Exception('Invalid field name. Use only letters, numbers, and underscores, starting with a letter or underscore.');
+            }
+
+            // Build ALTER TABLE SQL to drop the column
+            $sql = "ALTER TABLE " . pg_escape_identifier($this->pgsql->getConnection(), $this->selectedTable) . 
+                   " DROP COLUMN " . pg_escape_identifier($this->pgsql->getConnection(), $fieldName);
+
+            // Execute the ALTER TABLE query
+            $result = $this->pgsql->run_query($sql);
+
+            // Set success message
+            $this->structureMessage = [
+                'type' => 'success',
+                'text' => "Field '" . htmlspecialchars($fieldName) . "' has been deleted successfully."
+            ];
+            return true;
+
+        } catch (\Exception $e) {
+            $this->structureMessage = [
+                'type' => 'error',
+                'text' => 'Delete field failed: ' . $e->getMessage()
+            ];
+            return false;
+        }
+    }
 }
 
 class MainView
@@ -1157,6 +1206,13 @@ class MainView
                         <a href="?db=' . urlencode($this->controller->getSelectedDatabase()) . '&table=' . urlencode($selectedTable) . '&action=structure&subaction=edit_field&field=' . urlencode($field['name']) . '" class="btn-secondary btn-small">
                             <i class="fas fa-edit"></i> Edit
                         </a>
+                        <form method="POST" action="" style="display: inline;" onsubmit="return confirm(\'Are you sure you want to delete the field &quot;' . htmlspecialchars($field['name']) . '&quot;?\');">
+                            <input type="hidden" name="action" value="delete_field">
+                            <input type="hidden" name="field_name" value="' . htmlspecialchars($field['name']) . '">
+                            <button type="submit" class="btn-danger btn-small" title="Delete Field">
+                                <i class="fas fa-trash"></i> Delete
+                            </button>
+                        </form>
                     </td>
                 </tr>';
             }
@@ -2984,6 +3040,10 @@ class Main {
 
     public function processEditField() {
         return $this->controller->processEditField();
+    }
+
+    public function processDeleteField() {
+        return $this->controller->processDeleteField();
     }
 
     // Delegate getters to controller for backward compatibility
