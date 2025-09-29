@@ -35,6 +35,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             header('Location: ' . $_SERVER['REQUEST_URI'] . '&inserted=1');
             exit;
         }
+    } elseif ($_POST['action'] === 'edit_row') {
+        $success = $main->processEditForm();
+        if ($success) {
+            // Redirect with success message
+            header('Location: ' . $_SERVER['REQUEST_URI'] . '&edited=1');
+            exit;
+        }
     } elseif ($_POST['action'] === 'delete_rows') {
         $success = $main->processDeleteRows();
         if ($success) {
@@ -68,6 +75,31 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             header('Location: ' . $redirectUrl . '&deleted=' . $main->deleteSuccessCount);
             exit;
         }
+    } elseif ($_POST['action'] === 'add_field') {
+        $success = $main->processAddField();
+        // Refresh the structure page to show the new field
+        header('Location: ' . $_SERVER['REQUEST_URI']);
+        exit;
+    } elseif ($_POST['action'] === 'edit_field') {
+        $success = $main->processEditField();
+        // Refresh the structure page to show the updated field
+        header('Location: ' . $_SERVER['REQUEST_URI']);
+        exit;
+    } elseif ($_POST['action'] === 'delete_field') {
+        $success = $main->processDeleteField();
+        // Refresh the structure page to show the updated field
+        header('Location: ' . $_SERVER['REQUEST_URI']);
+        exit;
+    } elseif ($_POST['action'] === 'import_csv') {
+        $success = $main->processCsvImport();
+        if ($success) {
+            // Redirect with success message
+            header('Location: ' . $_SERVER['REQUEST_URI'] . '&imported=1');
+            exit;
+        }
+    } elseif ($_POST['action'] === 'export_csv') {
+        $success = $main->processCsvExport();
+        // Note: processCsvExport will exit automatically after sending the file
     } elseif ($_POST['action'] === 'create_schema') {
         $success = $main->processCreateSchema();
         if ($success) {
