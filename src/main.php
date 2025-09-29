@@ -6,6 +6,7 @@ class MainController
 {
     private $pgsql;
     private $selectedDatabase;
+    private $selectedSchema;
     private $selectedTable;
     private $selectedAction;
     private $currentPage;
@@ -13,6 +14,7 @@ class MainController
     private $tableStructure;
     private $tableData;
     private $databases;
+    private $schemas;
     private $tables;
     private $insertError;
     private $insertSuccess;
@@ -25,6 +27,7 @@ class MainController
 
         // Initialize properties from URL parameters or defaults
         $this->selectedDatabase = $_GET['db'] ?? $connectionData['database'] ?? 'postgres';
+        $this->selectedSchema = $_GET['schema'] ?? 'public';
         $this->selectedTable = $_GET['table'] ?? null;
         $this->selectedAction = $_GET['action'] ?? 'select';
         $this->currentPage = (int)($_GET['page'] ?? 1);
@@ -39,7 +42,10 @@ class MainController
 
         // Load initial data
         $this->loadDatabases();
-        $this->loadTables();
+        if ($this->selectedDatabase) {
+            $this->loadSchemas();
+            $this->loadTables();
+        }
 
         if ($this->selectedTable) {
             $this->loadTableStructure();
@@ -48,6 +54,7 @@ class MainController
     }
 
     public function getSelectedDatabase() { return $this->selectedDatabase; }
+    public function getSelectedSchema() { return $this->selectedSchema; }
     public function getSelectedTable() { return $this->selectedTable; }
     public function getSelectedAction() { return $this->selectedAction; }
     public function getCurrentPage() { return $this->currentPage; }
@@ -55,6 +62,7 @@ class MainController
     public function getTableStructure() { return $this->tableStructure; }
     public function getTableData() { return $this->tableData; }
     public function getDatabases() { return $this->databases; }
+    public function getSchemas() { return $this->schemas; }
     public function getTables() { return $this->tables; }
     public function getInsertError() { return $this->insertError; }
     public function getInsertSuccess() { return $this->insertSuccess; }
@@ -78,7 +86,7 @@ class MainController
         }
     }
 
-    private function loadTables()
+    private function loadSchemas()
     {
         if (!$this->selectedDatabase) return;
 
@@ -91,7 +99,26 @@ class MainController
                 $_SESSION['password']
             );
 
-            $this->tables = $this->pgsql->show_table();
+            $this->schemas = $this->pgsql->show_schemas();
+        } catch (\Exception $e) {
+            $this->schemas = [];
+        }
+    }
+
+    private function loadTables()
+    {
+        if (!$this->selectedDatabase || !$this->selectedSchema) return;
+
+        try {
+            $this->pgsql->connect(
+                $_SESSION['host'] ?? 'localhost',
+                $_SESSION['port'] ?? 5432,
+                $this->selectedDatabase,
+                $_SESSION['username'],
+                $_SESSION['password']
+            );
+
+            $this->tables = $this->pgsql->show_table($this->selectedSchema);
         } catch (\Exception $e) {
             $this->tables = [];
         }
@@ -110,7 +137,7 @@ class MainController
                 $_SESSION['password']
             );
 
-            $this->tableStructure = $this->pgsql->show_field($this->selectedTable);
+            $this->tableStructure = $this->pgsql->show_field($this->selectedTable, $this->selectedSchema);
         } catch (\Exception $e) {
             $this->tableStructure = [];
         }
@@ -480,6 +507,127 @@ class MainController
         return $name === 'id' || strpos($name, '_id') === 0 || strpos($name, 'id_') !== false;
     }
 
+    public function processCreateSchema()
+    {
+        try {
+            // Ensure we're connected to the correct database
+            $this->pgsql->connect(
+                $_SESSION['host'] ?? 'localhost',
+                $_SESSION['port'] ?? 5432,
+                $this->selectedDatabase,
+                $_SESSION['username'],
+                $_SESSION['password']
+            );
+
+            if (!isset($_POST['schema_name']) || empty(trim($_POST['schema_name']))) {
+                throw new \Exception('Schema name is required');
+            }
+
+            $schemaName = trim($_POST['schema_name']);
+
+            // Validate schema name (basic validation)
+            if (!preg_match('/^[a-zA-Z_][a-zA-Z0-9_]*$/', $schemaName)) {
+                throw new \Exception('Invalid schema name. Schema names must start with a letter or underscore and contain only letters, numbers, and underscores.');
+            }
+
+            // Create the schema
+            $this->pgsql->create_schema($schemaName);
+
+            // Set success message
+            $_SESSION['schema_success'] = "Schema '" . htmlspecialchars($schemaName) . "' has been successfully created.";
+            return true;
+
+        } catch (\Exception $e) {
+            $_SESSION['schema_error'] = $e->getMessage();
+            return false;
+        }
+    }
+
+    public function processDropSchema()
+    {
+        try {
+            // Ensure we're connected to the correct database
+            $this->pgsql->connect(
+                $_SESSION['host'] ?? 'localhost',
+                $_SESSION['port'] ?? 5432,
+                $this->selectedDatabase,
+                $_SESSION['username'],
+                $_SESSION['password']
+            );
+
+            if (!isset($_POST['schema_name']) || empty($_POST['schema_name'])) {
+                throw new \Exception('No schema name provided');
+            }
+
+            $schemaName = trim($_POST['schema_name']);
+            $cascade = isset($_POST['cascade']) && $_POST['cascade'] === '1';
+
+            // Prevent dropping system schemas
+            $systemSchemas = ['public', 'information_schema'];
+            if (in_array(strtolower($schemaName), $systemSchemas)) {
+                throw new \Exception('Cannot drop system schema: ' . htmlspecialchars($schemaName));
+            }
+
+            // Drop the schema
+            $this->pgsql->drop_schema($schemaName, $cascade);
+
+            // Set success message
+            $_SESSION['schema_success'] = "Schema '" . htmlspecialchars($schemaName) . "' has been successfully dropped.";
+            return true;
+
+        } catch (\Exception $e) {
+            $_SESSION['schema_error'] = $e->getMessage();
+            return false;
+        }
+    }
+
+    public function processRenameSchema()
+    {
+        try {
+            // Ensure we're connected to the correct database
+            $this->pgsql->connect(
+                $_SESSION['host'] ?? 'localhost',
+                $_SESSION['port'] ?? 5432,
+                $this->selectedDatabase,
+                $_SESSION['username'],
+                $_SESSION['password']
+            );
+
+            if (!isset($_POST['old_schema_name']) || empty(trim($_POST['old_schema_name']))) {
+                throw new \Exception('Current schema name is required');
+            }
+
+            if (!isset($_POST['new_schema_name']) || empty(trim($_POST['new_schema_name']))) {
+                throw new \Exception('New schema name is required');
+            }
+
+            $oldName = trim($_POST['old_schema_name']);
+            $newName = trim($_POST['new_schema_name']);
+
+            // Validate new schema name
+            if (!preg_match('/^[a-zA-Z_][a-zA-Z0-9_]*$/', $newName)) {
+                throw new \Exception('Invalid new schema name. Schema names must start with a letter or underscore and contain only letters, numbers, and underscores.');
+            }
+
+            // Prevent renaming system schemas
+            $systemSchemas = ['public', 'information_schema'];
+            if (in_array(strtolower($oldName), $systemSchemas)) {
+                throw new \Exception('Cannot rename system schema: ' . htmlspecialchars($oldName));
+            }
+
+            // Rename the schema
+            $this->pgsql->rename_schema($oldName, $newName);
+
+            // Set success message
+            $_SESSION['schema_success'] = "Schema '" . htmlspecialchars($oldName) . "' has been successfully renamed to '" . htmlspecialchars($newName) . "'.";
+            return true;
+
+        } catch (\Exception $e) {
+            $_SESSION['schema_error'] = $e->getMessage();
+            return false;
+        }
+    }
+
     public function processSqlQuery()
     {
         try {
@@ -571,6 +719,92 @@ class MainView
             </main>
         </div>
     </div>
+
+    <!-- Schema Management Modals -->
+    <div id="createSchemaModal" class="modal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h3><i class="fas fa-plus"></i> Create New Schema</h3>
+                <span class="modal-close" onclick="closeSchemaModal()">&times;</span>
+            </div>
+            <form method="POST" action="">
+                <input type="hidden" name="action" value="create_schema">
+                <div class="modal-body">
+                    <div class="form-group">
+                        <label for="schema_name">Schema Name:</label>
+                        <input type="text" id="schema_name" name="schema_name" required
+                               pattern="^[a-zA-Z_][a-zA-Z0-9_]*$"
+                               title="Schema name must start with a letter or underscore and contain only letters, numbers, and underscores">
+                        <small class="form-hint">Use only letters, numbers, and underscores. Must start with a letter or underscore.</small>
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn-secondary" onclick="closeSchemaModal()">Cancel</button>
+                    <button type="submit" class="btn-primary">Create Schema</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <div id="renameSchemaModal" class="modal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h3><i class="fas fa-edit"></i> Rename Schema</h3>
+                <span class="modal-close" onclick="closeSchemaModal()">&times;</span>
+            </div>
+            <form method="POST" action="">
+                <input type="hidden" name="action" value="rename_schema">
+                <input type="hidden" id="old_schema_name" name="old_schema_name">
+                <div class="modal-body">
+                    <div class="form-group">
+                        <label for="current_schema_display">Current Name:</label>
+                        <input type="text" id="current_schema_display" readonly>
+                    </div>
+                    <div class="form-group">
+                        <label for="new_schema_name">New Name:</label>
+                        <input type="text" id="new_schema_name" name="new_schema_name" required
+                               pattern="^[a-zA-Z_][a-zA-Z0-9_]*$"
+                               title="Schema name must start with a letter or underscore and contain only letters, numbers, and underscores">
+                        <small class="form-hint">Use only letters, numbers, and underscores. Must start with a letter or underscore.</small>
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn-secondary" onclick="closeSchemaModal()">Cancel</button>
+                    <button type="submit" class="btn-primary">Rename Schema</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <div id="dropSchemaModal" class="modal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h3><i class="fas fa-exclamation-triangle"></i> Drop Schema</h3>
+                <span class="modal-close" onclick="closeSchemaModal()">&times;</span>
+            </div>
+            <form method="POST" action="">
+                <input type="hidden" name="action" value="drop_schema">
+                <input type="hidden" id="drop_schema_name" name="schema_name">
+                <div class="modal-body">
+                    <div class="warning-message">
+                        <p><strong>Warning:</strong> You are about to drop the schema "<span id="drop_schema_display"></span>".</p>
+                        <p>This action cannot be undone and will delete all tables and data within this schema.</p>
+                    </div>
+                    <div class="form-group">
+                        <label>
+                            <input type="checkbox" id="cascade_option" name="cascade" value="1">
+                            Use CASCADE (also drop dependent objects)
+                        </label>
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn-secondary" onclick="closeSchemaModal()">Cancel</button>
+                    <button type="submit" class="btn-danger">Drop Schema</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
 </body>
 </html>';
     }
@@ -594,7 +828,7 @@ class MainView
                 </a>';
 
             if ($db === $selectedDb) {
-                $html .= $this->getTablesList();
+                $html .= $this->getSchemasList();
             }
 
             $html .= '</div>';
@@ -604,10 +838,44 @@ class MainView
         return $html;
     }
 
+    private function getSchemasList()
+    {
+        $schemas = $this->controller->getSchemas();
+        $selectedSchema = $this->controller->getSelectedSchema();
+
+        if (empty($schemas)) return '';
+
+        $html = '<ul class="schemas-list">';
+
+        foreach ($schemas as $schema) {
+            $isActive = ($schema === $selectedSchema) ? 'active' : '';
+            $html .= '<li class="schema-item ' . $isActive . '">
+                <a href="?db=' . urlencode($this->controller->getSelectedDatabase()) . '&schema=' . urlencode($schema) . '" class="schema-name">
+                    <i class="fas fa-folder"></i> ' . htmlspecialchars($schema) . '
+                </a>';
+
+            if ($schema === $selectedSchema) {
+                $html .= '<ul class="schema-actions">
+                    <li><a href="#" onclick="showCreateSchemaModal()" title="Create Schema"><i class="fas fa-plus"></i></a></li>
+                    <li><a href="#" onclick="showRenameSchemaModal(\'' . htmlspecialchars($schema) . '\')" title="Rename Schema"><i class="fas fa-edit"></i></a></li>
+                    <li><a href="#" onclick="showDropSchemaModal(\'' . htmlspecialchars($schema) . '\')" title="Drop Schema"><i class="fas fa-trash"></i></a></li>
+                </ul>';
+
+                $html .= $this->getTablesList();
+            }
+
+            $html .= '</li>';
+        }
+
+        $html .= '</ul>';
+        return $html;
+    }
+
     private function getTablesList()
     {
         $tables = $this->controller->getTables();
         $selectedTable = $this->controller->getSelectedTable();
+        $selectedSchema = $this->controller->getSelectedSchema();
 
         if (empty($tables)) return '';
 
@@ -616,18 +884,18 @@ class MainView
         foreach ($tables as $table) {
             $isActive = ($table === $selectedTable) ? 'active' : '';
             $html .= '<li class="table-item ' . $isActive . '">
-                <a href="?db=' . urlencode($this->controller->getSelectedDatabase()) . '&table=' . urlencode($table) . '&action=select" class="table-name">
+                <a href="?db=' . urlencode($this->controller->getSelectedDatabase()) . '&schema=' . urlencode($selectedSchema) . '&table=' . urlencode($table) . '&action=select" class="table-name">
                     <i class="fas fa-table"></i> ' . htmlspecialchars($table) . '
                 </a>';
 
             if ($table === $selectedTable) {
                 //table actions
                 $html .= '<ul class="table-actions">
-                    <li><a href="?db=' . urlencode($this->controller->getSelectedDatabase()) . '&table=' . urlencode($table) . '&action=structure"><i class="fas fa-info-circle"></i></a></li>
-                    <li><a href="?db=' . urlencode($this->controller->getSelectedDatabase()) . '&table=' . urlencode($table) . '&action=select"><i class="fas fa-list"></i></a></li>
-                    <li><a href="?db=' . urlencode($this->controller->getSelectedDatabase()) . '&table=' . urlencode($table) . '&action=insert"><i class="fas fa-plus"></i></a></li>
-                    <li><a href="?db=' . urlencode($this->controller->getSelectedDatabase()) . '&table=' . urlencode($table) . '&action=delete"><i class="fas fa-trash"></i></a></li>
-                    <li><a href="?db=' . urlencode($this->controller->getSelectedDatabase()) . '&table=' . urlencode($table) . '&action=drop" onclick="return confirmDropTable(\'' . htmlspecialchars($table) . '\')"><i class="fas fa-times-circle"></i></a></li>
+                    <li><a href="?db=' . urlencode($this->controller->getSelectedDatabase()) . '&schema=' . urlencode($selectedSchema) . '&table=' . urlencode($table) . '&action=structure"><i class="fas fa-info-circle"></i></a></li>
+                    <li><a href="?db=' . urlencode($this->controller->getSelectedDatabase()) . '&schema=' . urlencode($selectedSchema) . '&table=' . urlencode($table) . '&action=select"><i class="fas fa-list"></i></a></li>
+                    <li><a href="?db=' . urlencode($this->controller->getSelectedDatabase()) . '&schema=' . urlencode($selectedSchema) . '&table=' . urlencode($table) . '&action=insert"><i class="fas fa-plus"></i></a></li>
+                    <li><a href="?db=' . urlencode($this->controller->getSelectedDatabase()) . '&schema=' . urlencode($selectedSchema) . '&table=' . urlencode($table) . '&action=delete"><i class="fas fa-trash"></i></a></li>
+                    <li><a href="?db=' . urlencode($this->controller->getSelectedDatabase()) . '&schema=' . urlencode($selectedSchema) . '&table=' . urlencode($table) . '&action=drop" onclick="return confirmDropTable(\'' . htmlspecialchars($table) . '\')"><i class="fas fa-times-circle"></i></a></li>
                 </ul>';
             }
 
@@ -823,6 +1091,23 @@ class MainView
                 Drop table failed: ' . htmlspecialchars($_SESSION['drop_error']) . '
             </div>';
             unset($_SESSION['drop_error']);
+        }
+
+        // Schema messages
+        if (isset($_SESSION['schema_success'])) {
+            $html .= '<div class="alert alert-success">
+                <i class="fas fa-check-circle"></i>
+                ' . htmlspecialchars($_SESSION['schema_success']) . '
+            </div>';
+            unset($_SESSION['schema_success']);
+        }
+
+        if (isset($_SESSION['schema_error'])) {
+            $html .= '<div class="alert alert-error">
+                <i class="fas fa-exclamation-triangle"></i>
+                Schema operation failed: ' . htmlspecialchars($_SESSION['schema_error']) . '
+            </div>';
+            unset($_SESSION['schema_error']);
         }
 
         return $html;
@@ -1674,6 +1959,235 @@ class MainView
             }
         }
 
+        /* Schema Management Styles */
+        .schemas-list {
+            list-style: none;
+            padding: 0;
+            margin: 10px 0;
+        }
+
+        .schema-item {
+            margin: 5px 0;
+            background-color:rgb(14, 37, 60);
+        }
+
+        .schema-item > .schema-name {
+            display: block;
+            padding: 8px 12px;
+            color: #666;
+            text-decoration: none;
+            border-radius: 4px;
+            transition: all 0.3s;
+            font-weight: 500;
+        }
+
+        .schema-item > .schema-name:hover {
+            background: #f8f9fa;
+            color: #333;
+        }
+
+        .schema-item.active > .schema-name {
+            background:rgb(15, 71, 56);
+            color: white;
+        }
+
+        .schema-actions {
+            display: flex;
+            gap: 5px;
+            padding: 5px 12px;
+            opacity: 0;
+            transition: opacity 0.3s;
+        }
+
+        .schema-item:hover .schema-actions {
+            opacity: 1;
+        }
+
+        .schema-item.active .schema-actions {
+            opacity: 1;
+        }
+
+        .schema-actions li {
+            list-style: none;
+        }
+
+        .schema-actions a {
+            color: #666;
+            text-decoration: none;
+            padding: 5px;
+            border-radius: 3px;
+            transition: all 0.3s;
+        }
+
+        .schema-actions a:hover {
+            background: #f0f0f0;
+            color: #333;
+        }
+
+        .schema-actions a[href*="rename"] {
+            color: #f39c12;
+        }
+
+        .schema-actions a[href*="rename"]:hover {
+            background: #f39c12;
+            color: white;
+        }
+
+        .schema-actions a[href*="drop"] {
+            color: #e74c3c;
+        }
+
+        .schema-actions a[href*="drop"]:hover {
+            background: #e74c3c;
+            color: white;
+        }
+
+        /* Modal Styles */
+        .modal {
+            display: none;
+            position: fixed;
+            z-index: 1000;
+            left: 0;
+            top: 0;
+            width: 100%;
+            height: 100%;
+            background-color: rgba(0, 0, 0, 0.5);
+        }
+
+        .modal-content {
+            background-color: white;
+            margin: 10% auto;
+            padding: 0;
+            border-radius: 8px;
+            width: 90%;
+            max-width: 500px;
+            box-shadow: 0 10px 30px rgba(0, 0, 0, 0.3);
+            animation: modalFadeIn 0.3s ease-out;
+        }
+
+        @keyframes modalFadeIn {
+            from { opacity: 0; transform: translateY(-50px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+
+        .modal-header {
+            padding: 20px 30px;
+            border-bottom: 1px solid #e1e8ed;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .modal-header h3 {
+            margin: 0;
+            color: #2d3748;
+            font-size: 20px;
+        }
+
+        .modal-close {
+            font-size: 28px;
+            font-weight: bold;
+            color: #aaa;
+            cursor: pointer;
+            transition: color 0.3s;
+        }
+
+        .modal-close:hover {
+            color: #333;
+        }
+
+        .modal-body {
+            padding: 30px;
+        }
+
+        .modal-footer {
+            padding: 20px 30px;
+            border-top: 1px solid #e1e8ed;
+            display: flex;
+            justify-content: flex-end;
+            gap: 10px;
+        }
+
+        .form-group {
+            margin-bottom: 20px;
+        }
+
+        .form-group label {
+            display: block;
+            margin-bottom: 5px;
+            font-weight: 600;
+            color: #2d3748;
+        }
+
+        .form-group input[type="text"] {
+            width: 100%;
+            padding: 10px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            font-size: 14px;
+            transition: border-color 0.3s;
+        }
+
+        .form-group input[type="text"]:focus {
+            outline: none;
+            border-color: #3498db;
+            box-shadow: 0 0 0 2px rgba(52, 152, 219, 0.2);
+        }
+
+        .form-group input[readonly] {
+            background: #f8f9fa;
+            color: #6c757d;
+        }
+
+        .form-hint {
+            display: block;
+            margin-top: 5px;
+            font-size: 12px;
+            color: #6c757d;
+        }
+
+        .warning-message {
+            background: #fff5f5;
+            border: 1px solid #fed7d7;
+            border-radius: 6px;
+            padding: 15px;
+            margin-bottom: 20px;
+        }
+
+        .warning-message p {
+            margin: 0 0 10px 0;
+            color: #2d3748;
+        }
+
+        .warning-message p:last-child {
+            margin-bottom: 0;
+        }
+
+        /* Responsive modal styles */
+        @media (max-width: 768px) {
+            .modal-content {
+                margin: 5% auto;
+                width: 95%;
+            }
+
+            .modal-header,
+            .modal-body,
+            .modal-footer {
+                padding: 20px;
+            }
+
+            .modal-footer {
+                flex-direction: column;
+            }
+
+            .modal-footer .btn-primary,
+            .modal-footer .btn-secondary,
+            .modal-footer .btn-danger {
+                width: 100%;
+                margin-bottom: 10px;
+            }
+        }
+
         /* Drop Table Styles */
         .drop-table-container {
             max-width: 600px;
@@ -2445,6 +2959,64 @@ class MainView
             return confirm(\'FINAL WARNING: This will permanently delete the table and ALL its data!\\n\\nClick OK to proceed or Cancel to stop.\');
         }
 
+        // Schema Modal Functions
+        function showCreateSchemaModal() {
+            var modal = document.getElementById(\'createSchemaModal\');
+            if (modal) {
+                modal.style.display = \'block\';
+                var input = document.getElementById(\'schema_name\');
+                if (input) input.focus();
+            }
+        }
+
+        function showRenameSchemaModal(schemaName) {
+            var oldInput = document.getElementById(\'old_schema_name\');
+            var currentDisplay = document.getElementById(\'current_schema_display\');
+            var newInput = document.getElementById(\'new_schema_name\');
+            var modal = document.getElementById(\'renameSchemaModal\');
+
+            if (oldInput) oldInput.value = schemaName;
+            if (currentDisplay) currentDisplay.value = schemaName;
+            if (newInput) newInput.value = \'\';
+            if (modal) {
+                modal.style.display = \'block\';
+                if (newInput) newInput.focus();
+            }
+        }
+
+        function showDropSchemaModal(schemaName) {
+            var nameInput = document.getElementById(\'drop_schema_name\');
+            var displaySpan = document.getElementById(\'drop_schema_display\');
+            var cascadeCheckbox = document.getElementById(\'cascade_option\');
+            var modal = document.getElementById(\'dropSchemaModal\');
+
+            if (nameInput) nameInput.value = schemaName;
+            if (displaySpan) displaySpan.textContent = schemaName;
+            if (cascadeCheckbox) cascadeCheckbox.checked = false;
+            if (modal) modal.style.display = \'block\';
+        }
+
+        function closeSchemaModal() {
+            var createModal = document.getElementById(\'createSchemaModal\');
+            var renameModal = document.getElementById(\'renameSchemaModal\');
+            var dropModal = document.getElementById(\'dropSchemaModal\');
+
+            if (createModal) createModal.style.display = \'none\';
+            if (renameModal) renameModal.style.display = \'none\';
+            if (dropModal) dropModal.style.display = \'none\';
+        }
+
+        // Close modal when clicking outside
+        window.onclick = function(event) {
+            var modals = [\'createSchemaModal\', \'renameSchemaModal\', \'dropSchemaModal\'];
+            for (var i = 0; i < modals.length; i++) {
+                var modal = document.getElementById(modals[i]);
+                if (event.target === modal) {
+                    modal.style.display = \'none\';
+                }
+            }
+        };
+
         let columnCounter = 1;
 
         function addColumn() {
@@ -2593,6 +3165,18 @@ class Main {
 
     public function processCreateTable() {
         return $this->controller->processCreateTable();
+    }
+
+    public function processCreateSchema() {
+        return $this->controller->processCreateSchema();
+    }
+
+    public function processDropSchema() {
+        return $this->controller->processDropSchema();
+    }
+
+    public function processRenameSchema() {
+        return $this->controller->processRenameSchema();
     }
 
     // Delegate getters to controller for backward compatibility
