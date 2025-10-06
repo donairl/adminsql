@@ -4,8 +4,8 @@
  * Author: Donny + Copilot
  */
 
-$sourceDir = __DIR__ . '/src'; // Change to your source folder
-$outputFile = __DIR__ . '/merged.min.php';
+$sourceDir = __DIR__ . '/..'; // Change to your source folder
+$outputFile = __DIR__ . '/index.php';
 $processed = [];
 
 function inlineIncludes($filePath, &$processed, $sourceDir) {
@@ -49,46 +49,6 @@ function inlineIncludes($filePath, &$processed, $sourceDir) {
     return $content;
 }
 
-function minifyPHP($code) {
-    // Remove comments
-    $code = preg_replace('!/\*.*?\*/!s', '', $code); // Multi-line
-    $code = preg_replace('/\/\/.*(?=\n)/', '', $code); // Single-line
-    // Remove blank lines and collapse whitespace
-    $code = preg_replace('/^\s*$/m', '', $code);
-    $code = preg_replace('/\s+/', ' ', $code);
-    return trim($code);
-}
-
-function minifyHTML($html) {
-    // Remove comments
-    $html = preg_replace('/<!--.*?-->/s', '', $html);
-    // Collapse whitespace between tags
-    $html = preg_replace('/>\s+</', '><', $html);
-    // Remove excessive spaces
-    $html = preg_replace('/\s{2,}/', ' ', $html);
-    return trim($html);
-}
-
-function minifyInlineCSS($html) {
-    return preg_replace_callback('/<style\b[^>]*>(.*?)<\/style>/is', function ($matches) {
-        $css = $matches[1];
-        $css = preg_replace('!/\*.*?\*/!s', '', $css);
-        $css = preg_replace('/\s+/', ' ', $css);
-        $css = preg_replace('/\s*([{}:;,])\s*/', '$1', $css);
-        return "<style>$css</style>";
-    }, $html);
-}
-
-function minifyInlineJS($html) {
-    return preg_replace_callback('/<script\b[^>]*>(.*?)<\/script>/is', function ($matches) {
-        $js = $matches[1];
-        $js = preg_replace('!/\*.*?\*/!s', '', $js);
-        $js = preg_replace('/\/\/.*(?=\n)/', '', $js);
-        $js = preg_replace('/\s+/', ' ', $js);
-        $js = preg_replace('/\s*([{}();,:])\s*/', '$1', $js);
-        return "<script>$js</script>";
-    }, $html);
-}
 
 // Merge files - only class files, keep entry points separate
 $mergedContent = '';
@@ -113,14 +73,6 @@ foreach ($filesToMerge as $file) {
     $mergedContent .= $fileContent . "\n";
 }
 
-// Minify PHP
-$minified = minifyPHP($mergedContent);
-
-// Minify embedded HTML/CSS/JS
-$minified = minifyHTML($minified);
-$minified = minifyInlineCSS($minified);
-$minified = minifyInlineJS($minified);
-
 // Save output
-file_put_contents($outputFile, $minified);
-echo "Merged and minified file saved to: $outputFile\n";
+file_put_contents($outputFile, $mergedContent);
+echo "Merged file saved to: $outputFile\n";
