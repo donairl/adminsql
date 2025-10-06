@@ -73,6 +73,9 @@ foreach ($filesToMerge as $file) {
     $mergedContent .= $fileContent . "\n";
 }
 
+// Remove all PHP closing tags in the middle of the file
+$mergedContent = preg_replace('/\?>\s*(?=.)/', '', $mergedContent);
+
 // Save output
 file_put_contents($outputFile, $mergedContent);
 echo "Merged file saved to: $outputFile\n";
