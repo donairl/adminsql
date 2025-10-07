@@ -6,7 +6,7 @@ class Login {
     private $databases = [];
 
     public function __construct() {
-      
+        // Start session if not already started
         if (session_status() === PHP_SESSION_NONE) {
             session_start();
         }
@@ -545,8 +545,6 @@ use App\Login;
 $login = new Login();
 $login->processLogin();
 echo $login->getHtml();
-?>
-
 // Start session if not already started
 if (session_status() === PHP_SESSION_NONE) {
     session_start();
@@ -558,8 +556,8 @@ $_SESSION = array();
 // Destroy the session
 session_destroy();
 
-// Redirect to login page
-header('Location: index.php');
+// Redirect to main page (logout successful)
+header('Location: main.php');
 exit;
 
 
